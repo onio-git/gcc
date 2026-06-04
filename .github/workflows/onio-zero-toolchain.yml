@@ -129,6 +129,24 @@ jobs:
           "$PREFIX/bin/$TARGET-gcc" -mcpu=onio-zero -O2 sanity.c -o sanity.elf
           "$PREFIX/bin/$TARGET-size" sanity.elf
 
+      # The MSYS2-built .exe files link against MinGW runtime DLLs that live
+      # in /mingw64/bin, not in the prefix.  Copy each DLL next to every
+      # toolchain executable (bin/ and libexec/...) so the package runs on a
+      # clean Windows box with no MSYS2 installed.
+      - name: Bundle MinGW runtime DLLs (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          set -eux
+          mapfile -t exes < <(find onio-zero-toolchain -name '*.exe')
+          dlls=$(for e in "${exes[@]}"; do ldd "$e" 2>/dev/null | awk '/mingw64/ {print $3}'; done | sort -u)
+          dirs=$(for e in "${exes[@]}"; do dirname "$e"; done | sort -u)
+          for d in $dirs; do
+            for dll in $dlls; do
+              [ -f "$dll" ] && cp -u "$dll" "$d/"
+            done
+          done
+          echo "Bundled DLLs:"; echo "$dlls"
+
       - name: Package
         run: |
           set -eux
