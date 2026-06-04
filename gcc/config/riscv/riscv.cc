@@ -516,25 +516,27 @@ static const struct riscv_tune_param rocket_tune_info = {
 };
 
 /* Costs to use when optimizing for the ONiO.zero ("Aldebaran") core: a
-   single-issue in-order rv32imc_zicsr_zba_zbb_zbs_zifencei part with a 2 KB
-   instruction cache and an
-   8-entry branch-target buffer (no data cache).  Because the I-cache is tiny,
-   we favour code density over alignment padding (no extra function/loop/jump
-   alignment), and because the BTB is small and never predicts forward
-   conditional branches, taken branches are comparatively expensive, so
-   branch_cost is raised to bias the optimisers toward straight-line code.
-   FIXME: int_mul/int_div, memory_cost and branch_cost are placeholders copied
-   from rocket; replace with measured Aldebaran cycle counts (mul/div latency,
-   flash wait-states for hard-miss line fills).  */
+   single-issue in-order rv32imc_zicsr_zba_zbb_zbs_zifencei part.  Measured
+   cycle counts: mul = 1; div = 2-33, operand-dependent (modelled at the
+   33-cycle worst case); load/store = 1 -- there is no data cache, so memory
+   accesses never miss.  A conditional branch costs 1 cycle when predicted
+   correctly and 2 on a misprediction, so branches are cheap and branch_cost
+   is low; raising it would push the optimisers toward branchless code, which
+   on rv32imc (no conditional move) is usually longer rather than faster.
+   The 2 KB instruction cache argues for code density over alignment padding,
+   so no extra function/loop/jump alignment is requested.  (The I-cache
+   affects instruction fetch only, not load/store; its 2-way LRU soft/hard
+   miss behaviour and the BTB's forward-branch and word-aliasing quirks are
+   not modelled.)  */
 static const struct riscv_tune_param onio_zero_tune_info = {
   {COSTS_N_INSNS (4), COSTS_N_INSNS (5)},	/* fp_add (unused: no F ext) */
   {COSTS_N_INSNS (4), COSTS_N_INSNS (5)},	/* fp_mul (unused: no F ext) */
   {COSTS_N_INSNS (20), COSTS_N_INSNS (20)},	/* fp_div (unused: no F ext) */
-  {COSTS_N_INSNS (4), COSTS_N_INSNS (4)},	/* int_mul (FIXME measure) */
-  {COSTS_N_INSNS (33), COSTS_N_INSNS (65)},	/* int_div (FIXME measure) */
+  {COSTS_N_INSNS (1), COSTS_N_INSNS (1)},	/* int_mul (1 cycle) */
+  {COSTS_N_INSNS (33), COSTS_N_INSNS (33)},	/* int_div (2-33, worst case) */
   1,						/* issue_rate */
-  4,						/* branch_cost (weak BTB) */
-  5,						/* memory_cost (FIXME flash ws) */
+  2,						/* branch_cost (1 hit / 2 miss) */
+  2,						/* memory_cost (1 cycle, no Dcache) */
   8,						/* fmv_cost */
   true,						/* slow_unaligned_access */
   false,					/* vector_unaligned_access */
