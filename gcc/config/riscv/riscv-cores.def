@@ -60,6 +60,7 @@ RISCV_TUNE("andes-25-series", andes_25_series, andes_25_tune_info)
 RISCV_TUNE("andes-23-series", andes_23_series, andes_23_tune_info)
 RISCV_TUNE("andes-45-series", andes_45_series, andes_45_tune_info)
 RISCV_TUNE("arc-v-rmx-100-series", arcv_rmx100, arcv_rmx100_tune_info)
+RISCV_TUNE("onio-zero", generic, onio_zero_tune_info)
 
 #undef RISCV_TUNE
 
@@ -207,5 +208,8 @@ RISCV_CORE("andes-ax45",      "rv64imafdc_zicsr_zifencei_xandesperf", "andes-45-
 RISCV_CORE("spacemit-x60",    "rv64imafdcv_zba_zbb_zbc_zbs_zicboz_zicond_"
 			      "zbkc_zfh_zvfh_zvkt_zvl256b_sscofpmf_xsmtvdot",
 			      "spacemit-x60")
+
+RISCV_CORE("onio-zero",       "rv32imc_zicsr_zba_zbb_zbs_zifencei",
+			      "onio-zero")
 
 #undef RISCV_CORE

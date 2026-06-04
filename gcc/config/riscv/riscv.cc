@@ -515,6 +515,41 @@ static const struct riscv_tune_param rocket_tune_info = {
   false,					/* prefer-agnostic.  */
 };
 
+/* Costs to use when optimizing for the ONiO.zero ("Aldebaran") core: a
+   single-issue in-order rv32imc_zicsr_zba_zbb_zbs_zifencei part with a 2 KB
+   instruction cache and an
+   8-entry branch-target buffer (no data cache).  Because the I-cache is tiny,
+   we favour code density over alignment padding (no extra function/loop/jump
+   alignment), and because the BTB is small and never predicts forward
+   conditional branches, taken branches are comparatively expensive, so
+   branch_cost is raised to bias the optimisers toward straight-line code.
+   FIXME: int_mul/int_div, memory_cost and branch_cost are placeholders copied
+   from rocket; replace with measured Aldebaran cycle counts (mul/div latency,
+   flash wait-states for hard-miss line fills).  */
+static const struct riscv_tune_param onio_zero_tune_info = {
+  {COSTS_N_INSNS (4), COSTS_N_INSNS (5)},	/* fp_add (unused: no F ext) */
+  {COSTS_N_INSNS (4), COSTS_N_INSNS (5)},	/* fp_mul (unused: no F ext) */
+  {COSTS_N_INSNS (20), COSTS_N_INSNS (20)},	/* fp_div (unused: no F ext) */
+  {COSTS_N_INSNS (4), COSTS_N_INSNS (4)},	/* int_mul (FIXME measure) */
+  {COSTS_N_INSNS (33), COSTS_N_INSNS (65)},	/* int_div (FIXME measure) */
+  1,						/* issue_rate */
+  4,						/* branch_cost (weak BTB) */
+  5,						/* memory_cost (FIXME flash ws) */
+  8,						/* fmv_cost */
+  true,						/* slow_unaligned_access */
+  false,					/* vector_unaligned_access */
+  false,					/* use_divmod_expansion */
+  false,					/* overlap_op_by_pieces */
+  true,						/* use_zero_stride_load */
+  false,					/* speculative_sched_vsetvl */
+  RISCV_FUSE_NOTHING,				/* fusible_ops */
+  NULL,						/* vector cost */
+  NULL,						/* function_align (density) */
+  NULL,						/* jump_align (density) */
+  NULL,						/* loop_align (density) */
+  false,					/* prefer-agnostic.  */
+};
+
 /* Costs to use when optimizing for Sifive 7 Series.  */
 static const struct riscv_tune_param sifive_7_tune_info = {
   {COSTS_N_INSNS (4), COSTS_N_INSNS (5)},	/* fp_add */
