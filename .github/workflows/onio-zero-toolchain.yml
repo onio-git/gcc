@@ -1,0 +1,157 @@
+name: onio-zero toolchain
+
+# Build a riscv32-unknown-elf toolchain (binutils + this GCC fork + newlib)
+# that natively hosts on Linux / macOS / Windows and targets the ONiO.zero
+# (Aldebaran) core via -mcpu=onio-zero.
+#
+# Releases are cut on version tags (e.g. `git tag v0.1 && git push --tags`).
+# Each host's artifact is published with a FIXED name, so the "latest" URL is
+# stable forever:
+#
+#   https://github.com/onio-git/gcc/releases/latest/download/onio-zero-toolchain-linux-x86_64.tar.xz
+#   https://github.com/onio-git/gcc/releases/latest/download/onio-zero-toolchain-macos-arm64.tar.xz
+#   https://github.com/onio-git/gcc/releases/latest/download/onio-zero-toolchain-windows-x86_64.zip
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: {}        # manual runs for testing (no release upload)
+
+permissions:
+  contents: write              # needed to create/attach release assets
+
+env:
+  BINUTILS_VER: "2.43"
+  NEWLIB_VER: "4.4.0.20231231"
+  TARGET: riscv32-unknown-elf
+  ARCH: rv32imc_zicsr_zba_zbb_zbs_zifencei
+  ABI: ilp32
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux-x86_64
+            ext: tar.xz
+          - os: macos-14            # Apple Silicon (arm64)
+            name: macos-arm64
+            ext: tar.xz
+          - os: windows-latest
+            name: windows-x86_64
+            ext: zip
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        # On Windows everything runs inside the MSYS2 MinGW64 shell.
+        shell: ${{ matrix.os == 'windows-latest' && 'msys2 {0}' || 'bash' }}
+    steps:
+      - name: Checkout GCC fork (shallow)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install host deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential wget tar xz-utils texinfo bison flex zip
+
+      - name: Install host deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install wget xz texinfo bison flex
+
+      - name: Setup MSYS2 (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel git wget tar xz zip
+            mingw-w64-x86_64-gcc mingw-w64-x86_64-gmp mingw-w64-x86_64-mpfr
+            mingw-w64-x86_64-mpc mingw-w64-x86_64-isl
+            texinfo bison flex
+
+      - name: Fetch binutils + newlib
+        run: |
+          set -eux
+          wget -q https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VER}.tar.xz
+          wget -q https://sourceware.org/pub/newlib/newlib-${NEWLIB_VER}.tar.gz
+          tar xf binutils-${BINUTILS_VER}.tar.xz
+          tar xf newlib-${NEWLIB_VER}.tar.gz
+
+      # Linux/macOS: build gmp/mpfr/mpc/isl in-tree (self-contained).
+      # Windows: those come from the MSYS2 mingw packages installed above.
+      - name: Download GCC prerequisites (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: ./contrib/download_prerequisites
+
+      - name: Build toolchain
+        run: |
+          set -eux
+          PREFIX="$PWD/onio-zero-toolchain"
+          export PATH="$PREFIX/bin:$PATH"
+          JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+          GCCSRC="$PWD"
+
+          # 1. binutils
+          mkdir build-binutils && cd build-binutils
+          "$GCCSRC/binutils-${BINUTILS_VER}/configure" --target="$TARGET" --prefix="$PREFIX" \
+            --disable-nls --disable-werror --disable-gdb --disable-sim --disable-gprofng
+          make -j"$JOBS"
+          make install
+          cd "$GCCSRC"
+
+          # 2. gcc compiler + libgcc
+          mkdir build-gcc && cd build-gcc
+          "$GCCSRC/configure" --target="$TARGET" --prefix="$PREFIX" \
+            --with-arch="$ARCH" --with-abi="$ABI" --disable-multilib \
+            --enable-languages=c --with-newlib --without-headers \
+            --disable-shared --disable-threads --disable-nls \
+            --disable-libssp --disable-libquadmath --disable-libgomp
+          make -j"$JOBS" all-gcc all-target-libgcc
+          make install-gcc install-target-libgcc
+          cd "$GCCSRC"
+
+          # 3. newlib
+          mkdir build-newlib && cd build-newlib
+          "$GCCSRC/newlib-${NEWLIB_VER}/configure" --target="$TARGET" --prefix="$PREFIX" \
+            CFLAGS_FOR_TARGET="-O2 -march=$ARCH -mabi=$ABI"
+          make -j"$JOBS"
+          make install
+          cd "$GCCSRC"
+
+          # 4. sanity: -mcpu=onio-zero must compile + link
+          printf 'int main(void){return 0;}\n' > sanity.c
+          "$PREFIX/bin/$TARGET-gcc" -mcpu=onio-zero -O2 sanity.c -o sanity.elf
+          "$PREFIX/bin/$TARGET-size" sanity.elf
+
+      - name: Package
+        run: |
+          set -eux
+          NAME="onio-zero-toolchain-${{ matrix.name }}"
+          # Strip target-side libs/objs of debug info to shrink the tarball.
+          find onio-zero-toolchain -name '*.o' -o -name '*.a' | while read -r f; do
+            "$PWD/onio-zero-toolchain/bin/$TARGET-strip" -g "$f" 2>/dev/null || true
+          done
+          if [ "${{ matrix.ext }}" = "zip" ]; then
+            zip -qr "$NAME.zip" onio-zero-toolchain
+          else
+            tar -cf - onio-zero-toolchain | xz -9 -T0 > "$NAME.tar.xz"
+          fi
+          ls -lh "$NAME".*
+
+      - name: Upload build artifact (always)
+        uses: actions/upload-artifact@v4
+        with:
+          name: onio-zero-toolchain-${{ matrix.name }}
+          path: onio-zero-toolchain-${{ matrix.name }}.${{ matrix.ext }}
+
+      - name: Attach to release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: onio-zero-toolchain-${{ matrix.name }}.${{ matrix.ext }}
