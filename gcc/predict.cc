@@ -2843,6 +2843,40 @@ get_predictor_value (br_predictor predictor, HOST_WIDE_INT probability)
     }
 }
 
+/* Return true if OP is an SSA name whose value is the logical OR of one or
+   more equality tests against nonzero integer constants, i.e. a set-membership
+   test of the form (x == C1) | (x == C2) | ...  This is the shape a || chain
+   of equality tests (e.g. c == 'E' || c == 'e') is lowered to.  Like a single
+   equality, such a test asks whether a value equals one of a few specific
+   constants and is therefore usually false; the | combining is all that hides
+   it from the plain opcode heuristic below.  */
+
+static bool
+expr_is_const_set_membership (tree op)
+{
+  if (TREE_CODE (op) != SSA_NAME)
+    return false;
+  gimple *def = SSA_NAME_DEF_STMT (op);
+  if (!is_gimple_assign (def))
+    return false;
+  switch (gimple_assign_rhs_code (def))
+    {
+    case BIT_IOR_EXPR:
+      return expr_is_const_set_membership (gimple_assign_rhs1 (def))
+	     && expr_is_const_set_membership (gimple_assign_rhs2 (def));
+    case EQ_EXPR:
+      {
+	tree a = gimple_assign_rhs1 (def);
+	tree b = gimple_assign_rhs2 (def);
+	return INTEGRAL_TYPE_P (TREE_TYPE (a))
+	       && TREE_CODE (b) == INTEGER_CST
+	       && !integer_zerop (b);
+      }
+    default:
+      return false;
+    }
+}
+
 /* Predict using opcode of the last statement in basic block.  */
 static void
 tree_predict_by_opcode (basic_block bb)
@@ -2922,6 +2956,12 @@ tree_predict_by_opcode (basic_block bb)
 	   FP code.  */
 	if (FLOAT_TYPE_P (type))
 	  ;
+	/* A set-membership test (x == C1) | (x == C2) | ... compared == 0 is
+	   true exactly when the value is in none of the sets, which is the
+	   usual case, so predict the then edge taken.  */
+	else if ((integer_zerop (op1) && expr_is_const_set_membership (op0))
+		 || (integer_zerop (op0) && expr_is_const_set_membership (op1)))
+	  predict_edge_def (then_edge, PRED_TREE_OPCODE_NONEQUAL, TAKEN);
 	/* Comparisons with 0 are often used for booleans and there is
 	   nothing useful to predict about them.  */
 	else if (integer_zerop (op0) || integer_zerop (op1))
@@ -2937,6 +2977,12 @@ tree_predict_by_opcode (basic_block bb)
 	   FP code.  */
 	if (FLOAT_TYPE_P (type))
 	  ;
+	/* A set-membership test (x == C1) | (x == C2) | ... compared != 0 is
+	   true exactly when the value is in one of the sets, which is usually
+	   not the case, so predict the then edge not taken.  */
+	else if ((integer_zerop (op1) && expr_is_const_set_membership (op0))
+		 || (integer_zerop (op0) && expr_is_const_set_membership (op1)))
+	  predict_edge_def (then_edge, PRED_TREE_OPCODE_NONEQUAL, NOT_TAKEN);
 	/* Comparisons with 0 are often used for booleans and there is
 	   nothing useful to predict about them.  */
 	else if (integer_zerop (op0)
@@ -2963,6 +3009,16 @@ tree_predict_by_opcode (basic_block bb)
 	    || real_onep (op1)
 	    || real_minus_onep (op1))
 	  predict_edge_def (then_edge, PRED_TREE_OPCODE_POSITIVE, NOT_TAKEN);
+	/* An unsigned comparison against a small positive constant is
+	   typically a value/character classification range check, e.g.
+	   isdigit() compiled to (unsigned)(c - '0') <= 9.  Such checks
+	   usually succeed, so predict the in-range (then) edge taken.  */
+	else if (TYPE_UNSIGNED (type)
+		 && TREE_CODE (op1) == INTEGER_CST
+		 && tree_fits_uhwi_p (op1)
+		 && tree_to_uhwi (op1) >= 2
+		 && tree_to_uhwi (op1) <= 255)
+	  predict_edge_def (then_edge, PRED_TREE_OPCODE_POSITIVE, TAKEN);
 	break;
 
       case GE_EXPR:
@@ -2974,6 +3030,16 @@ tree_predict_by_opcode (basic_block bb)
 	    || real_onep (op1)
 	    || real_minus_onep (op1))
 	  predict_edge_def (then_edge, PRED_TREE_OPCODE_POSITIVE, TAKEN);
+	/* The complement of the classification range check: an unsigned
+	   comparison >/>= a small positive constant (e.g. !isdigit compiled
+	   to (unsigned)(c - '0') > 9) is usually false, so predict the
+	   out-of-range (then) edge not taken.  */
+	else if (TYPE_UNSIGNED (type)
+		 && TREE_CODE (op1) == INTEGER_CST
+		 && tree_fits_uhwi_p (op1)
+		 && tree_to_uhwi (op1) >= 2
+		 && tree_to_uhwi (op1) <= 255)
+	  predict_edge_def (then_edge, PRED_TREE_OPCODE_POSITIVE, NOT_TAKEN);
 	break;
 
       default:
