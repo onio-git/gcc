@@ -1536,3 +1536,130 @@ make_pass_cprop_hardreg (gcc::context *ctxt)
 {
   return new pass_cprop_hardreg (ctxt);
 }
+
+/* Partially-dead live-out copy sinking.
+
+   After unrolling a loop with a loop-carried value that is also live out
+   (e.g. core_list_reverse's `prev = list`), the register allocator rotates
+   the in-loop uses through registers but leaves a reconciliation copy
+   `Rd = Rs` in every unrolled body to keep the live-out register up to date
+   in case this body is the one that exits.  On the loop-continue path that
+   copy is immediately overwritten by the next body's copy, so it is dead
+   there; it only matters on the (rare) exit edge.  Sinking it onto the exit
+   edge removes it from the hot path.  This runs after pass_cprop_hardreg,
+   on hard registers.  */
+
+namespace {
+
+const pass_data pass_data_sink_liveout_copies =
+{
+  RTL_PASS, /* type */
+  "sinkcopy", /* name */
+  OPTGROUP_NONE, /* optinfo_flags */
+  TV_NONE, /* tv_id */
+  0, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  TODO_df_finish, /* todo_flags_finish */
+};
+
+struct sink_cand { rtx_insn *copy; edge e; };
+
+class pass_sink_liveout_copies : public rtl_opt_pass
+{
+public:
+  pass_sink_liveout_copies (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_sink_liveout_copies, ctxt)
+  {}
+  bool gate (function *) final override { return optimize >= 2; }
+  unsigned int execute (function *) final override;
+};
+
+unsigned int
+pass_sink_liveout_copies::execute (function *fun)
+{
+  df_analyze ();
+
+  auto_vec<sink_cand> todo;
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, fun)
+    {
+      if (EDGE_COUNT (bb->succs) != 2)
+	continue;
+      rtx_insn *jump = BB_END (bb);
+      if (!jump || !JUMP_P (jump))
+	continue;
+      rtx_insn *copy = prev_nonnote_nondebug_insn (jump);
+      if (!copy || !NONJUMP_INSN_P (copy) || BLOCK_FOR_INSN (copy) != bb)
+	continue;
+      rtx set = single_set (copy);
+      if (!set)
+	continue;
+      rtx dst = SET_DEST (set), src = SET_SRC (set);
+      if (!REG_P (dst) || !REG_P (src))
+	continue;
+      unsigned dr = REGNO (dst), sr = REGNO (src);
+      if (!HARD_REGISTER_NUM_P (dr) || !HARD_REGISTER_NUM_P (sr) || dr == sr)
+	continue;
+      if (GET_MODE (dst) != GET_MODE (src)
+	  || hard_regno_nregs (dr, GET_MODE (dst)) != 1
+	  || hard_regno_nregs (sr, GET_MODE (src)) != 1)
+	continue;
+      /* The branch must not reference dst (its value is being removed) nor
+	 clobber src (whose value we still need on the edge).  */
+      if (reg_mentioned_p (dst, PATTERN (jump)) || reg_set_p (src, jump))
+	continue;
+      /* src must be available at the edge.  */
+      if (!REGNO_REG_SET_P (df_get_live_out (bb), sr))
+	continue;
+      /* Exactly one successor must have dst live-in (the exit), the other
+	 dead (the loop-continue path) — i.e. the copy is partially dead.  */
+      edge e_exit = NULL, e_cont = NULL, e;
+      edge_iterator ei;
+      bool ok = true;
+      FOR_EACH_EDGE (e, ei, bb->succs)
+	{
+	  if (e->flags & (EDGE_ABNORMAL | EDGE_EH | EDGE_FAKE))
+	    { ok = false; break; }
+	  if (REGNO_REG_SET_P (df_get_live_in (e->dest), dr))
+	    { if (e_exit) { ok = false; break; } e_exit = e; }
+	  else
+	    { if (e_cont) { ok = false; break; } e_cont = e; }
+	}
+      if (!ok || !e_exit || !e_cont)
+	continue;
+      sink_cand c = { copy, e_exit };
+      todo.safe_push (c);
+    }
+
+  if (todo.is_empty ())
+    return 0;
+
+  unsigned i;
+  sink_cand *c;
+  FOR_EACH_VEC_ELT (todo, i, c)
+    {
+      rtx set = single_set (c->copy);
+      start_sequence ();
+      emit_insn (gen_rtx_SET (copy_rtx (SET_DEST (set)),
+			      copy_rtx (SET_SRC (set))));
+      rtx_insn *seq = get_insns ();
+      end_sequence ();
+      insert_insn_on_edge (seq, c->e);
+      delete_insn (c->copy);
+    }
+  commit_edge_insertions ();
+  if (dump_file)
+    fprintf (dump_file, "sinkcopy: sank %u partially-dead live-out copies\n",
+	     todo.length ());
+  return 0;
+}
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_sink_liveout_copies (gcc::context *ctxt)
+{
+  return new pass_sink_liveout_copies (ctxt);
+}
