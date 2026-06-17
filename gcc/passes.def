@@ -332,6 +332,10 @@ along with GCC; see the file COPYING3.  If not see
 	  POP_INSERT_PASSES ()
 	  NEXT_PASS (pass_slp_vectorize);
 	  NEXT_PASS (pass_loop_prefetch);
+	  /* Partially unroll small hot innermost loops before IVOPTs so the
+	     unrolled accesses get base+offset addressing instead of a pointer
+	     bump per element (off unless --param=preunroll-factor>1).  */
+	  NEXT_PASS (pass_preunroll);
 	  /* Run IVOPTs after the last pass that uses data-reference analysis
 	     as that doesn't handle TARGET_MEM_REFs.  */
 	  NEXT_PASS (pass_iv_optimize);

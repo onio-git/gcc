@@ -28,6 +28,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "fold-const.h"
 #include "tree-cfg.h"
 #include "tree-ssa.h"
+#include "tree-into-ssa.h"
 #include "tree-ssa-loop-niter.h"
 #include "tree-ssa-loop.h"
 #include "tree-ssa-loop-manip.h"
@@ -36,10 +37,12 @@ along with GCC; see the file COPYING3.  If not see
 #include "gimple-iterator.h"
 #include "cfghooks.h"
 #include "tree-data-ref.h"
+#include "alias.h"
 #include "tree-ssa-loop-ivopts.h"
 #include "tree-vectorizer.h"
 #include "tree-ssa-sccvn.h"
 #include "tree-cfgcleanup.h"
+#include "predict.h"
 
 /* Unroll and Jam transformation
 
@@ -100,6 +103,84 @@ along with GCC; see the file COPYING3.  If not see
        }  effect: move content to front by one element
 */
 
+/* True if PHI in LOOP's header is a genuine integer assoc/comm reduction.
+   Looks through same-precision integer conversions in the cycle.  */
+static bool
+jam_reduction_phi_p (class loop *loop, gphi *phi)
+{
+  tree res = gimple_phi_result (phi);
+  if (!INTEGRAL_TYPE_P (TREE_TYPE (res)))
+    return false;
+  /* An induction variable (j = j + invariant_step) is not a reduction.  */
+  affine_iv iv;
+  if (simple_iv (loop, loop, res, &iv, true))
+    return false;
+  edge le = loop_latch_edge (loop);
+  if (!le) return false;
+  tree latch = PHI_ARG_DEF_FROM_EDGE (phi, le);
+  if (TREE_CODE (latch) != SSA_NAME) return false;
+  gimple *def = SSA_NAME_DEF_STMT (latch);
+  while (is_gimple_assign (def)
+	 && CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (def))
+	 && TREE_CODE (gimple_assign_rhs1 (def)) == SSA_NAME
+	 && INTEGRAL_TYPE_P (TREE_TYPE (gimple_assign_rhs1 (def)))
+	 && (TYPE_PRECISION (TREE_TYPE (gimple_assign_lhs (def)))
+	     == TYPE_PRECISION (TREE_TYPE (gimple_assign_rhs1 (def)))))
+    def = SSA_NAME_DEF_STMT (gimple_assign_rhs1 (def));
+  if (!is_gimple_assign (def)) return false;
+  enum tree_code code = gimple_assign_rhs_code (def);
+  if (code != PLUS_EXPR && code != MULT_EXPR && code != BIT_AND_EXPR
+      && code != BIT_IOR_EXPR && code != BIT_XOR_EXPR
+      && code != MIN_EXPR && code != MAX_EXPR)
+    return false;
+  tree op1 = gimple_assign_rhs1 (def), op2 = gimple_assign_rhs2 (def);
+  for (int i = 0; i < 2; i++)
+    {
+      tree *opp = i ? &op2 : &op1;
+      if (*opp && TREE_CODE (*opp) == SSA_NAME)
+	{
+	  gimple *d = SSA_NAME_DEF_STMT (*opp);
+	  if (is_gimple_assign (d) && CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (d))
+	      && TREE_CODE (gimple_assign_rhs1 (d)) == SSA_NAME
+	      && INTEGRAL_TYPE_P (TREE_TYPE (gimple_assign_rhs1 (d)))
+	      && (TYPE_PRECISION (TREE_TYPE (*opp))
+		  == TYPE_PRECISION (TREE_TYPE (gimple_assign_rhs1 (d)))))
+	    *opp = gimple_assign_rhs1 (d);
+	}
+    }
+  if (op1 != res && op2 != res)
+    return false;
+
+  /* Only treat this as a jam-safe reduction if it is re-initialized each
+     outer-loop iteration (a per-output reduction, e.g. matrix C[i][j] from
+     sum = 0).  If its initial value is carried across the outer loop it is a
+     *shared* accumulator: after unroll-and-jam the per-copy accumulators would
+     need a post-loop reduction tree, which fuse_loops does not emit, so fusing
+     it would drop the other copies' contributions.  Refuse those here; the
+     general non-reduction safety check then prevents fusing such a loop.  */
+  if (class loop *outer = loop_outer (loop))
+    if (edge ple = loop_preheader_edge (loop))
+      {
+	tree init = PHI_ARG_DEF_FROM_EDGE (phi, ple);
+	if (init && TREE_CODE (init) == SSA_NAME)
+	  {
+	    gimple *idef = SSA_NAME_DEF_STMT (init);
+	    if (gimple_code (idef) == GIMPLE_PHI
+		&& gimple_bb (idef) == outer->header)
+	      return false;
+	  }
+      }
+  return true;
+}
+static bool
+loop_has_jam_reduction (class loop *loop)
+{
+  for (gphi_iterator psi = gsi_start_phis (loop->header); !gsi_end_p (psi); gsi_next (&psi))
+    if (!virtual_operand_p (gimple_phi_result (psi.phi ())) && jam_reduction_phi_p (loop, psi.phi ()))
+      return true;
+  return false;
+}
+
 /* Modify the loop tree for the fact that all code once belonging
    to the OLD loop or the outer loop of OLD now is inside LOOP.  */
 
@@ -157,7 +238,7 @@ merge_loop_tree (class loop *loop, class loop *old)
    Check if any statements therein would prevent the transformation.  */
 
 static bool
-bb_prevents_fusion_p (basic_block bb)
+bb_prevents_fusion_p (basic_block bb, bool allow_store)
 {
   gimple_stmt_iterator gsi;
   /* BB is duplicated by outer unrolling and then all N-1 first copies
@@ -176,7 +257,9 @@ bb_prevents_fusion_p (basic_block bb)
   for (gsi = gsi_start_bb (bb); !gsi_end_p (gsi); gsi_next (&gsi))
     {
       gimple *g = gsi_stmt (gsi);
-      if (gimple_vdef (g) || gimple_has_side_effects (g))
+      if (gimple_has_side_effects (g))
+	return true;
+      if (gimple_vdef (g) && !(allow_store && gimple_store_p (g)))
 	return true;
     }
   return false;
@@ -192,6 +275,7 @@ unroll_jam_possible_p (class loop *outer, class loop *loop)
   basic_block *bbs;
   int i, n;
   class tree_niter_desc niter;
+  bool is_red = loop_has_jam_reduction (loop);
 
   /* When fusing the loops we skip the latch block
      of the first one, so it mustn't have any effects to
@@ -251,7 +335,8 @@ unroll_jam_possible_p (class loop *outer, class loop *loop)
 	{
 	  gimple *use_stmt = USE_STMT (use_p);
 	  if (!is_gimple_debug (use_stmt)
-	      && flow_bb_inside_loop_p (outer, gimple_bb (use_stmt)))
+	      && flow_bb_inside_loop_p (outer, gimple_bb (use_stmt))
+	      && !(is_red && gimple_store_p (use_stmt)))
 	    return false;
 	}
     }
@@ -262,7 +347,7 @@ unroll_jam_possible_p (class loop *outer, class loop *loop)
 
   for (i = 0; i < n; i++)
     if (bbs[i]->loop_father == outer
-	&& (bb_prevents_fusion_p (bbs[i])
+	&& (bb_prevents_fusion_p (bbs[i], is_red)
 	    /* Outer loop exits must come after the inner loop, otherwise
 	       we'll put the outer loop exit into the fused inner loop.  */
 	    || (loop_exits_from_bb_p (outer, bbs[i])
@@ -291,7 +376,10 @@ unroll_jam_possible_p (class loop *outer, class loop *loop)
 	  continue;
 	}
       if (!simple_iv (loop, loop, op, &iv, true))
-	return false;
+	{
+	  if (is_red && jam_reduction_phi_p (loop, psi.phi ())) continue;
+	  return false;
+	}
       /* The inductions must be regular, loop invariant step and initial
 	 value.  */
       if (!expr_invariant_in_loop_p (outer, iv.step)
@@ -321,10 +409,56 @@ static void
 fuse_loops (class loop *loop)
 {
   class loop *next = loop->next;
+  /* Second-copy reductions, accumulated across all fusions and relocated only
+     once afterwards (when the fused loop's latch edge is final).  */
+  auto_vec<tree> all_res, all_init, all_upd;
+
+  /* The first copy's own reductions live in LOOP->header and are corrupted by
+     flush_pending_stmts during the latch redirects below (their latch arg gets
+     overwritten with a later copy's value).  Capture their correct update so we
+     can restore it afterwards.  */
+  auto_vec<tree> first_red_res, first_red_upd;
+  {
+    edge fle = loop_latch_edge (loop);
+    for (gphi_iterator psi = gsi_start_phis (loop->header);
+	 !gsi_end_p (psi); gsi_next (&psi))
+      {
+	gphi *phi = psi.phi ();
+	if (!virtual_operand_p (gimple_phi_result (phi))
+	    && jam_reduction_phi_p (loop, phi))
+	  {
+	    first_red_res.safe_push (gimple_phi_result (phi));
+	    first_red_upd.safe_push (PHI_ARG_DEF_FROM_EDGE (phi, fle));
+	  }
+      }
+  }
 
   while (next)
     {
       edge e;
+
+      /* Capture reduction PHIs of the second copy before tearing down its
+	 latch edge.  RED_RES is the per-fusion set used to skip them below.  */
+      auto_vec<tree> red_res;
+      {
+	edge nph = loop_preheader_edge (next);
+	edge nlatch = loop_latch_edge (next);
+	for (gphi_iterator psi = gsi_start_phis (next->header);
+	     !gsi_end_p (psi); gsi_next (&psi))
+	  {
+	    gphi *phi = psi.phi ();
+	    tree res = gimple_phi_result (phi);
+	    if (virtual_operand_p (res))
+	      continue;
+	    if (jam_reduction_phi_p (next, phi))
+	      {
+		red_res.safe_push (res);
+		all_res.safe_push (res);
+		all_init.safe_push (PHI_ARG_DEF_FROM_EDGE (phi, nph));
+		all_upd.safe_push (PHI_ARG_DEF_FROM_EDGE (phi, nlatch));
+	      }
+	  }
+      }
 
       remove_branch (single_pred_edge (loop->latch));
       /* Make delete_basic_block not fiddle with the loop structure.  */
@@ -339,16 +473,14 @@ fuse_loops (class loop *loop)
       gcc_assert (EDGE_COUNT (next->header->preds) == 1);
 
       /* The PHI nodes of the second body (single-argument now)
-	 need adjustments to use the right values: either directly
-	 the value of the corresponding PHI in the first copy or
-	 the one leaving the first body which unrolling did for us.
-
-	 See also unroll_jam_possible_p() for further possibilities.  */
+	 need adjustments: for an induction directly the value of the
+	 corresponding PHI in the first copy; reductions are relocated after
+	 all fusions and skipped here (left arg-less for now).  */
       gphi_iterator psi_first, psi_second;
       e = single_pred_edge (next->header);
       for (psi_first = gsi_start_phis (loop->header),
 	   psi_second = gsi_start_phis (next->header);
-	   !gsi_end_p (psi_first);
+	   !gsi_end_p (psi_first) && !gsi_end_p (psi_second);
 	   gsi_next (&psi_first), gsi_next (&psi_second))
 	{
 	  gphi *phi_first = psi_first.phi ();
@@ -360,19 +492,57 @@ fuse_loops (class loop *loop)
 	  if (virtual_operand_p (firstop))
 	    continue;
 
-	  /* Due to unroll_jam_possible_p() we know that this is
-	     an induction.  The second body goes over the same
-	     iteration space.  */
+	  tree secondres = gimple_phi_result (phi_second);
+	  bool is_red = false;
+	  for (tree r : red_res)
+	    if (r == secondres) { is_red = true; break; }
+	  if (is_red)
+	    continue;
+
+	  /* Otherwise this is an induction; the second body goes over the
+	     same iteration space.  */
 	  add_phi_arg (phi_second, firstop, e,
 		       gimple_location (phi_first));
 	}
-      gcc_assert (gsi_end_p (psi_second));
 
       merge_loop_tree (loop, next);
       gcc_assert (!next->num_nodes);
       class loop *ln = next->next;
       delete_loop (next);
       next = ln;
+    }
+
+  /* All copies are now fused and the latch edge is final.  Turn each captured
+     second-copy reduction RES into an independent loop-carried PHI NEWRES =
+     PHI(init, update) in the fused header, and feed NEWRES into the (now
+     mid-loop, single-pred) old reduction PHI so RES becomes a copy of NEWRES.
+     Later value-numbering folds the copy away.  This keeps the per-copy
+     accumulators independent without disturbing the existing SSA uses (the
+     LCSSA exit value and the reduction store).  */
+  edge llatch0 = loop_latch_edge (loop);
+  for (unsigned i = 0; i < first_red_res.length (); i++)
+    {
+      gphi *phi = as_a <gphi *> (SSA_NAME_DEF_STMT (first_red_res[i]));
+      for (unsigned k = 0; k < gimple_phi_num_args (phi); k++)
+	if (gimple_phi_arg_edge (phi, k) == llatch0)
+	  SET_PHI_ARG_DEF (phi, k, first_red_upd[i]);
+    }
+
+  if (!all_res.is_empty ())
+    {
+      edge lph = loop_preheader_edge (loop);
+      edge llatch = loop_latch_edge (loop);
+      for (unsigned i = 0; i < all_res.length (); i++)
+	{
+	  tree res = all_res[i];
+	  gphi *oldphi = as_a <gphi *> (SSA_NAME_DEF_STMT (res));
+	  edge into = single_pred_edge (gimple_bb (oldphi));
+	  tree newres = copy_ssa_name (res);
+	  gphi *np = create_phi_node (newres, loop->header);
+	  add_phi_arg (np, all_init[i], lph, UNKNOWN_LOCATION);
+	  add_phi_arg (np, all_upd[i], llatch, UNKNOWN_LOCATION);
+	  add_phi_arg (oldphi, newres, into, UNKNOWN_LOCATION);
+	}
     }
 }
 
@@ -588,6 +758,9 @@ tree_loop_unroll_and_jam (void)
 
 	      if (DR_IS_WRITE (dra) || DR_IS_WRITE (drb))
 		{
+		  if (!alias_sets_conflict_p (get_alias_set (DR_REF (dra)),
+					      get_alias_set (DR_REF (drb))))
+		    continue;
 		  unroll_factor = 0;
 		  break;
 		}
@@ -598,7 +771,8 @@ tree_loop_unroll_and_jam (void)
 	 to ignore all profitability concerns and apply the transformation
 	 always.  */
       if (!param_unroll_jam_min_percent)
-	profit_unroll = MAX(2, profit_unroll);
+	profit_unroll = MAX (loop_has_jam_reduction (loop)
+			     ? (unsigned)param_unroll_jam_max_unroll : 2u, profit_unroll);
       else if (removed * 100 / datarefs.length ()
 	  < (unsigned)param_unroll_jam_min_percent)
 	profit_unroll = 1;
@@ -622,9 +796,13 @@ tree_loop_unroll_and_jam (void)
 	  fuse_loops (outer->inner);
 	  todo |= TODO_cleanup_cfg;
 
-	  auto_bitmap exit_bbs;
-	  bitmap_set_bit (exit_bbs, single_exit (outer)->dest->index);
-	  todo |= do_rpo_vn (cfun, loop_preheader_edge (outer), exit_bbs);
+	  update_ssa (TODO_update_ssa);
+	  if (single_exit (outer))
+	    {
+	      auto_bitmap exit_bbs;
+	      bitmap_set_bit (exit_bbs, single_exit (outer)->dest->index);
+	      todo |= do_rpo_vn (cfun, loop_preheader_edge (outer), exit_bbs);
+	    }
 	}
 
       loop_nest.release ();
@@ -694,4 +872,125 @@ gimple_opt_pass *
 make_pass_loop_jam (gcc::context *ctxt)
 {
   return new pass_loop_jam (ctxt);
+}
+
+/* ---------------------------------------------------------------------------
+   Pre-IVOPTS partial unrolling of small hot innermost loops.
+
+   GCC's RTL loop unroller (-funroll-loops) runs AFTER IVOPTS, so each unrolled
+   copy re-increments the induction variable (e.g. addi p,p,2) instead of using
+   base+displacement addressing (lh 2(p)).  That wastes one pointer bump per
+   element.  By partially unrolling small innermost loops HERE -- before IVOPTS
+   -- IVOPTS assigns offset addressing to the unrolled accesses, so we emit one
+   pointer bump per FACTOR elements (matching what commercial compilers do).
+
+   Gated behind --param=preunroll-factor (default 1 = off).  Only fires for
+   -funroll-loops, on single-block innermost loops that contain memory accesses
+   and have a small body, and marks each unrolled loop so the later RTL unroller
+   leaves it alone.  */
+
+namespace {
+
+const pass_data pass_data_preunroll =
+{
+  GIMPLE_PASS, /* type */
+  "preunroll", /* name */
+  OPTGROUP_LOOP, /* optinfo_flags */
+  TV_LOOP_UNROLL, /* tv_id */
+  PROP_cfg, /* properties_required */
+  0, /* properties_provided */
+  0, /* properties_destroyed */
+  0, /* todo_flags_start */
+  0, /* todo_flags_finish */
+};
+
+class pass_preunroll : public gimple_opt_pass
+{
+public:
+  pass_preunroll (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_preunroll, ctxt)
+  {}
+
+  bool gate (function *) final override
+  {
+    return flag_unroll_loops && param_preunroll_factor > 1 && optimize >= 2;
+  }
+  unsigned int execute (function *) final override;
+};
+
+unsigned int
+pass_preunroll::execute (function *fun)
+{
+  if (number_of_loops (fun) <= 1)
+    return 0;
+
+  unsigned factor = (unsigned) param_preunroll_factor;
+  auto_vec<class loop *> cands;
+
+  for (auto loop : loops_list (cfun, LI_ONLY_INNERMOST))
+    {
+      /* Single basic-block body only: limits code growth and the
+	 offset-addressing payoff is on straight-line memory streams.  */
+      if (loop->num_nodes > 2)
+	continue;
+      if (!optimize_loop_for_speed_p (loop))
+	continue;
+
+      /* Size guard, and require memory accesses (the win is addressing).  */
+      unsigned nstmt = 0;
+      bool has_mem = false;
+      basic_block *bbs = get_loop_body (loop);
+      for (unsigned i = 0; i < loop->num_nodes; i++)
+	for (gimple_stmt_iterator gsi = gsi_start_bb (bbs[i]);
+	     !gsi_end_p (gsi); gsi_next (&gsi))
+	  {
+	    gimple *g = gsi_stmt (gsi);
+	    if (is_gimple_debug (g))
+	      continue;
+	    nstmt++;
+	    if (gimple_assign_load_p (g) || gimple_store_p (g))
+	      has_mem = true;
+	  }
+      free (bbs);
+
+      if (!has_mem
+	  || nstmt == 0
+	  || nstmt > (unsigned) param_preunroll_max_stmts)
+	continue;
+
+      class tree_niter_desc desc;
+      if (!can_unroll_loop_p (loop, factor, &desc))
+	continue;
+
+      cands.safe_push (loop);
+    }
+
+  bool changed = false;
+  for (class loop *loop : cands)
+    {
+      class tree_niter_desc desc;
+      if (!can_unroll_loop_p (loop, factor, &desc))
+	continue;
+      initialize_original_copy_tables ();
+      tree_unroll_loop (loop, factor, &desc);
+      free_original_copy_tables ();
+      /* Keep the later RTL unroller from unrolling this loop again.  */
+      loop->unroll = 1;
+      changed = true;
+    }
+
+  if (changed)
+    {
+      scev_reset ();
+      return TODO_cleanup_cfg | TODO_update_ssa;
+    }
+  return 0;
+}
+
+} // anon namespace
+
+gimple_opt_pass *
+make_pass_preunroll (gcc::context *ctxt)
+{
+  return new pass_preunroll (ctxt);
 }

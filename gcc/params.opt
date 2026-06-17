@@ -826,6 +826,14 @@ The maximum number of unrollings of a single loop.
 Common Joined UInteger Var(param_max_unrolled_insns) Init(200) Param Optimization
 The maximum number of instructions to consider to unroll in a loop.
 
+-param=preunroll-factor=
+Common Joined UInteger Var(param_preunroll_factor) Init(1) IntegerRange(1, 16) Param Optimization
+Unroll small innermost loops by this factor before IVOPTS so unrolled accesses get base+offset addressing (1 disables).
+
+-param=preunroll-max-stmts=
+Common Joined UInteger Var(param_preunroll_max_stmts) Init(20) Param Optimization
+Maximum number of gimple statements in an innermost loop body eligible for pre-IVOPTS unrolling.
+
 -param=max-unswitch-insns=
 Common Joined UInteger Var(param_max_unswitch_insns) Init(50) Param Optimization
 The maximum number of insns of an unswitched loop.

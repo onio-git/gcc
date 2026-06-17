@@ -380,6 +380,7 @@ extern gimple_opt_pass *make_pass_linterchange (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_tree_unswitch (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_loop_split (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_loop_jam (gcc::context *ctxt);
+extern gimple_opt_pass *make_pass_preunroll (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_predcom (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_iv_canon (gcc::context *ctxt);
 extern gimple_opt_pass *make_pass_scev_cprop (gcc::context *ctxt);
