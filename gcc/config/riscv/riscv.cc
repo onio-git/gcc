@@ -36,6 +36,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "insn-attr.h"
 #include "recog.h"
 #include "output.h"
+#include "flags.h"
 #include "alias.h"
 #include "tree.h"
 #include "stringpool.h"
@@ -12038,6 +12039,23 @@ riscv_override_options_internal (struct gcc_options *opts)
 
       opts->x_flag_cf_protection
       = (cf_protection_level) (opts->x_flag_cf_protection | CF_SET);
+    }
+
+  /* onio-zero, optimizing for speed: turn on a couple of passes the generic
+     -O2 leaves off, and default -falign-loops=1 (no loop-header padding).  On
+     the small 2 KB I-cache, padding loop headers shifts code and thrashes the
+     cache; a hash-verified board A/B showed it costs ~28M cycles on CoreMark
+     (142 -> 150 it/s when disabled).  Leave tree-ter at its -O2 default
+     (enabled): disabling it was a measured +5.9M-instruction regression.  */
+  if (cpu->tune_param == &onio_zero_tune_info && opts->x_optimize >= 2)
+    {
+      SET_OPTION_IF_UNSET (opts, &global_options_set, flag_gcse_after_reload, 1);
+      SET_OPTION_IF_UNSET (opts, &global_options_set, flag_tree_partial_pre, 1);
+      if (!opts->x_str_align_loops)
+	{
+	  opts->x_str_align_loops = "1";
+	  global_options_set.x_str_align_loops = "1";
+	}
     }
 }
 

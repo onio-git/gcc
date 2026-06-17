@@ -67,7 +67,8 @@ enum riscv_microarchitecture_type {
   spacemit_x60,
   arcv_rmx100,
   arcv_rhx100,
-  xt_c908
+  xt_c908,
+  onio_zero
 };
 extern enum riscv_microarchitecture_type riscv_microarchitecture;
 

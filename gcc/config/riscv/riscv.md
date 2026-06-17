@@ -677,7 +677,7 @@
 (define_attr "tune"
   "generic,sifive_7,sifive_p400,sifive_p600,xiangshan,generic_ooo,mips_p8700,
    tt_ascalon_d8,andes_25_series,andes_23_series,andes_45_series,spacemit_x60,
-   arcv_rmx100,arcv_rhx100,xt_c908"
+   arcv_rmx100,arcv_rhx100,xt_c908,onio_zero"
   (const (symbol_ref "((enum attr_tune) riscv_microarchitecture)")))
 
 ;; Describe a user's asm statement.
@@ -5271,6 +5271,7 @@
 (include "andes.md")
 ;; Pipeline models
 (include "generic.md")
+(include "onio-zero.md")
 (include "xiangshan.md")
 (include "mips-p8700.md")
 (include "sifive-7.md")

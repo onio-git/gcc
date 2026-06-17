@@ -70,4 +70,6 @@ particular CPU name.  Permissible values for this option are:
 
 @samp{arc-v-rmx-100-series},
 
+@samp{onio-zero},
+
 and all valid options for @option{-mcpu=}.
