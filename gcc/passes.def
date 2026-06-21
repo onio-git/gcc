@@ -531,6 +531,7 @@ along with GCC; see the file COPYING3.  If not see
 	  NEXT_PASS (pass_late_combine);
 	  NEXT_PASS (pass_gcse2);
 	  NEXT_PASS (pass_split_after_reload);
+	  NEXT_PASS (pass_loop_spill_motion);
 	  NEXT_PASS (pass_ree);
 	  NEXT_PASS (pass_compare_elim_after_reload);
 	  NEXT_PASS (pass_thread_prologue_and_epilogue);

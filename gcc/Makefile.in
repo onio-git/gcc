@@ -1620,6 +1620,7 @@ OBJS = \
 	loop-doloop.o \
 	loop-init.o \
 	loop-invariant.o \
+	loop-spill-motion.o \
 	loop-iv.o \
 	loop-unroll.o \
 	lower-subreg.o \

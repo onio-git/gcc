@@ -1866,6 +1866,10 @@ Common Var(flag_gcse_after_reload) Optimization
 Perform global common subexpression elimination after register allocation has
 finished.
 
+floop-spill-motion
+Common Var(flag_loop_spill_motion) Optimization
+Move loop-invariant spill-slot reloads and exit-only spill-slot stores out of loops after reload.
+
 Enum
 Name(dwarf_gnat_encodings) Type(int)
 
