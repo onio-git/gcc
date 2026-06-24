@@ -2877,6 +2877,30 @@ expr_is_const_set_membership (tree op)
     }
 }
 
+/* True if OP is (X & M) where M is a byte mask with at most two of the low
+   eight bits clear, so that (OP == 0) holds for only a handful of X values.
+   This is the bit-trick form GCC's reassociation lowers a small membership
+   test such as c == '+' || c == '-' into ((c + 213) & 253 == 0); unlike the
+   BIT_IOR form, the value is *zero* when in the set, so an == 0 test is the
+   rare (usually-false) case.  */
+
+static bool
+expr_is_masked_set_membership (tree op)
+{
+  if (TREE_CODE (op) != SSA_NAME)
+    return false;
+  gimple *def = SSA_NAME_DEF_STMT (op);
+  if (!is_gimple_assign (def)
+      || gimple_assign_rhs_code (def) != BIT_AND_EXPR)
+    return false;
+  tree m = gimple_assign_rhs2 (def);
+  if (TREE_CODE (m) != INTEGER_CST)
+    return false;
+  unsigned HOST_WIDE_INT mv = TREE_INT_CST_LOW (m) & 0xff;
+  /* >= 6 set bits among the low 8 => the in-set is at most four values.  */
+  return INTEGRAL_TYPE_P (TREE_TYPE (op)) && popcount_hwi (mv) >= 6;
+}
+
 /* Predict using opcode of the last statement in basic block.  */
 static void
 tree_predict_by_opcode (basic_block bb)
@@ -2962,6 +2986,11 @@ tree_predict_by_opcode (basic_block bb)
 	else if ((integer_zerop (op1) && expr_is_const_set_membership (op0))
 		 || (integer_zerop (op0) && expr_is_const_set_membership (op1)))
 	  predict_edge_def (then_edge, PRED_TREE_OPCODE_NONEQUAL, TAKEN);
+	/* The reassociated bit-mask form of a membership test is zero exactly
+	   when the value is in the (small) set, so == 0 is usually false.  */
+	else if ((integer_zerop (op1) && expr_is_masked_set_membership (op0))
+		 || (integer_zerop (op0) && expr_is_masked_set_membership (op1)))
+	  predict_edge_def (then_edge, PRED_TREE_OPCODE_NONEQUAL, NOT_TAKEN);
 	/* Comparisons with 0 are often used for booleans and there is
 	   nothing useful to predict about them.  */
 	else if (integer_zerop (op0) || integer_zerop (op1))
@@ -2983,6 +3012,11 @@ tree_predict_by_opcode (basic_block bb)
 	else if ((integer_zerop (op1) && expr_is_const_set_membership (op0))
 		 || (integer_zerop (op0) && expr_is_const_set_membership (op1)))
 	  predict_edge_def (then_edge, PRED_TREE_OPCODE_NONEQUAL, NOT_TAKEN);
+	/* The bit-mask form is nonzero exactly when the value is not in the
+	   small set, the usual case, so != 0 is usually true.  */
+	else if ((integer_zerop (op1) && expr_is_masked_set_membership (op0))
+		 || (integer_zerop (op0) && expr_is_masked_set_membership (op1)))
+	  predict_edge_def (then_edge, PRED_TREE_OPCODE_NONEQUAL, TAKEN);
 	/* Comparisons with 0 are often used for booleans and there is
 	   nothing useful to predict about them.  */
 	else if (integer_zerop (op0)
