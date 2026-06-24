@@ -1424,6 +1424,7 @@ OBJS = \
 	auto-inc-dec.o \
 	auto-profile.o \
 	bb-reorder.o \
+	branch-layout-profile.o \
 	bitmap.o \
 	builtins.o \
 	caller-save.o \

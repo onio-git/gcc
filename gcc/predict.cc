@@ -3419,6 +3419,9 @@ tree_estimate_probability (bool dry_run)
   delete ssa_expected_value;
   ssa_expected_value = NULL;
 
+  if (!dry_run)
+    apply_branch_layout_profile ();
+
   if (!dry_run
       && profile_status_for_fn (cfun) != PROFILE_READ)
     estimate_bb_frequencies ();
