@@ -522,13 +522,16 @@ static const struct riscv_tune_param rocket_tune_info = {
    33-cycle worst case); load/store = 1 -- there is no data cache, so memory
    accesses never miss.  A conditional branch costs 1 cycle when predicted
    correctly and 2 on a misprediction, so branches are cheap and branch_cost
-   is low; raising it would push the optimisers toward branchless code, which
-   on rv32imc (no conditional move) is usually longer rather than faster.
-   The 2 KB instruction cache argues for code density over alignment padding,
-   so no extra function/loop/jump alignment is requested.  (The I-cache
-   affects instruction fetch only, not load/store; its 2-way LRU soft/hard
-   miss behaviour and the BTB's forward-branch and word-aliasing quirks are
-   not modelled.)  */
+   is low; raising it pushes the optimizers toward smaller but slower code on
+   the measured 32 MHz CoreMark path.
+   The instruction cache is 2-way, 32 lines per way, with 8 32-bit words per
+   line (2 KB total, 32-byte line).  Hard misses fetch a flash line; soft
+   misses read the other way.  The BTB has 8 conditional taken-branch entries,
+   does not store forward conditional branches, and cannot hold two compressed
+   conditional branches from the same 32-bit instruction word at once.  These
+   details make dense code and hot fall-through layout more important than
+   padding alignment, so no extra function/label/jump/loop alignment is
+   requested.  */
 static const struct riscv_tune_param onio_zero_tune_info = {
   {COSTS_N_INSNS (4), COSTS_N_INSNS (5)},	/* fp_add (unused: no F ext) */
   {COSTS_N_INSNS (4), COSTS_N_INSNS (5)},	/* fp_mul (unused: no F ext) */
@@ -5033,7 +5036,7 @@ riscv_address_cost (rtx addr, machine_mode mode,
 		    bool speed ATTRIBUTE_UNUSED)
 {
   /* When optimizing for size, make incompressible 32-bit addresses more
-   * expensive so that compressible 32-bit addresses are preferred.  */
+     expensive so that compressible 32-bit addresses are preferred.  */
   if ((TARGET_RVC || TARGET_ZCA)
       && !speed && riscv_mshorten_memrefs && mode == SImode
       && !riscv_compressed_lw_address_p (addr))
@@ -12041,16 +12044,54 @@ riscv_override_options_internal (struct gcc_options *opts)
       = (cf_protection_level) (opts->x_flag_cf_protection | CF_SET);
     }
 
-  /* onio-zero, optimizing for speed: turn on a couple of passes the generic
-     -O2 leaves off, and default -falign-loops=1 (no loop-header padding).  On
-     the small 2 KB I-cache, padding loop headers shifts code and thrashes the
-     cache; a hash-verified board A/B showed it costs ~28M cycles on CoreMark
+  /* onio-zero, optimizing for speed: turn on passes the generic -O2 leaves
+     off, and default alignments to 1 byte (no padding).  On the 2 KB I-cache,
+     padding shifts code between 32-byte lines and 1 KB set aliases; a
+     hash-verified board A/B showed loop padding costs ~28M cycles on CoreMark
      (142 -> 150 it/s when disabled).  Leave tree-ter at its -O2 default
-     (enabled): disabling it was a measured +5.9M-instruction regression.  */
+     (enabled): disabling it was a measured +5.9M-instruction regression.
+
+     Enable the loop-unrolling stack, but lower the average-insn budget from
+     the generic default.  The non-countable RTL path catches tiny hot pointer
+     loops, while the lower budget keeps normal loop unrolling from growing
+     past the 2 KB I-cache.  Keep the secondary flags that -funroll-loops would
+     normally imply, since setting the flags here happens after common option
+     post-processing.
+
+     Disable speculative scheduling and RTL if-conversion.  The core has no
+     conditional moves, cheap correctly-predicted branches, and an 8-entry BTB;
+     measured CoreMark runs favor explicit branches and less speculative motion
+     over branchless/select-like instruction sequences.  */
   if (cpu->tune_param == &onio_zero_tune_info && opts->x_optimize >= 2)
     {
       SET_OPTION_IF_UNSET (opts, &global_options_set, flag_gcse_after_reload, 1);
       SET_OPTION_IF_UNSET (opts, &global_options_set, flag_tree_partial_pre, 1);
+      SET_OPTION_IF_UNSET (opts, &global_options_set, flag_unroll_loops, 1);
+      SET_OPTION_IF_UNSET (opts, &global_options_set, flag_unroll_all_loops, 1);
+      SET_OPTION_IF_UNSET (opts, &global_options_set, flag_cunroll_grow_size, 1);
+      SET_OPTION_IF_UNSET (opts, &global_options_set, flag_rename_registers, 1);
+      SET_OPTION_IF_UNSET (opts, &global_options_set, flag_web, 1);
+      SET_OPTION_IF_UNSET (opts, &global_options_set,
+			   flag_schedule_speculative, 0);
+      SET_OPTION_IF_UNSET (opts, &global_options_set, flag_if_conversion, 0);
+      SET_OPTION_IF_UNSET (opts, &global_options_set, flag_if_conversion2, 0);
+      SET_OPTION_IF_UNSET (opts, &global_options_set,
+			   param_max_average_unrolled_insns, 60);
+      if (!opts->x_str_align_functions)
+	{
+	  opts->x_str_align_functions = "1";
+	  global_options_set.x_str_align_functions = "1";
+	}
+      if (!opts->x_str_align_jumps)
+	{
+	  opts->x_str_align_jumps = "1";
+	  global_options_set.x_str_align_jumps = "1";
+	}
+      if (!opts->x_str_align_labels)
+	{
+	  opts->x_str_align_labels = "1";
+	  global_options_set.x_str_align_labels = "1";
+	}
       if (!opts->x_str_align_loops)
 	{
 	  opts->x_str_align_loops = "1";
