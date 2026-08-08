@@ -5074,6 +5074,38 @@ riscv_insn_cost (rtx_insn *insn, bool speed)
   return cost;
 }
 
+/* Implement TARGET_LOOP_UNROLL_ADJUST.
+
+   ONiO.zero has a 2 KB instruction cache.  The generic simple-loop RTL
+   unroller often trades a lot of extra hot text and fetch traffic for little
+   speed on this core.  Keep explicit user/source requests, but reject
+   automatic simple counted/runtime RTL unrolling and cap the remaining
+   non-simple unroll path when tuning for ONiO.zero.  */
+
+static unsigned
+riscv_loop_unroll_adjust (unsigned nunroll, class loop *loop)
+{
+  if (tune_param != &onio_zero_tune_info || optimize < 2)
+    return nunroll;
+
+  if ((OPTION_SET_P (flag_unroll_loops) && flag_unroll_loops)
+      || (OPTION_SET_P (flag_unroll_all_loops) && flag_unroll_all_loops))
+    return nunroll;
+
+  if (loop->unroll > 0 && loop->unroll < USHRT_MAX)
+    return nunroll;
+
+  class niter_desc *desc = get_simple_loop_desc (loop);
+  if (desc->simple_p && !desc->assumptions)
+    return 0;
+
+  if (OPTION_SET_P (param_max_average_unrolled_insns) || loop->av_ninsns == 0)
+    return nunroll;
+
+  const unsigned onio_max_average_unrolled_insns = 30;
+  return MIN (nunroll, onio_max_average_unrolled_insns / loop->av_ninsns);
+}
+
 /* Implement TARGET_MAX_NOCE_IFCVT_SEQ_COST.  Like the default implementation,
    but we consider cost units of branch instructions equal to cost units of
    other instructions.  */
@@ -12051,12 +12083,14 @@ riscv_override_options_internal (struct gcc_options *opts)
      (142 -> 150 it/s when disabled).  Leave tree-ter at its -O2 default
      (enabled): disabling it was a measured +5.9M-instruction regression.
 
-     Enable the loop-unrolling stack, but lower the average-insn budget from
-     the generic default.  The non-countable RTL path catches tiny hot pointer
-     loops, while the lower budget keeps normal loop unrolling from growing
-     past the 2 KB I-cache.  Keep the secondary flags that -funroll-loops would
-     normally imply, since setting the flags here happens after common option
-     post-processing.
+     Enable the loop-unrolling stack.  The ONiO TARGET_LOOP_UNROLL_ADJUST hook
+     rejects automatic simple-loop RTL unrolling and caps the remaining
+     non-countable RTL path so tiny hot pointer loops are still caught without
+     growing past the 2 KB I-cache.  Pre-IVOPTS unrolling by 2 lets IVOPTS fold
+     paired memory operations into base+offset addressing without the cache
+     damage of larger factors.  Keep the secondary flags that -funroll-loops
+     would normally imply, since setting the flags here happens after common
+     option post-processing.
 
      Disable speculative scheduling and RTL if-conversion.  The core has no
      conditional moves, cheap correctly-predicted branches, and an 8-entry BTB;
@@ -12076,7 +12110,9 @@ riscv_override_options_internal (struct gcc_options *opts)
       SET_OPTION_IF_UNSET (opts, &global_options_set, flag_if_conversion, 0);
       SET_OPTION_IF_UNSET (opts, &global_options_set, flag_if_conversion2, 0);
       SET_OPTION_IF_UNSET (opts, &global_options_set,
-			   param_max_average_unrolled_insns, 60);
+			   param_preunroll_factor, 2);
+      SET_OPTION_IF_UNSET (opts, &global_options_set,
+			   param_max_inline_insns_auto, 100);
       if (!opts->x_str_align_functions)
 	{
 	  opts->x_str_align_functions = "1";
@@ -16338,6 +16374,8 @@ riscv_memtag_tag_bitsize ()
 #define TARGET_ADDRESS_COST riscv_address_cost
 #undef TARGET_INSN_COST
 #define TARGET_INSN_COST riscv_insn_cost
+#undef TARGET_LOOP_UNROLL_ADJUST
+#define TARGET_LOOP_UNROLL_ADJUST riscv_loop_unroll_adjust
 
 #undef TARGET_MAX_NOCE_IFCVT_SEQ_COST
 #define TARGET_MAX_NOCE_IFCVT_SEQ_COST riscv_max_noce_ifcvt_seq_cost
