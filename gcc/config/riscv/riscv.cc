@@ -12102,6 +12102,7 @@ riscv_override_options_internal (struct gcc_options *opts)
       SET_OPTION_IF_UNSET (opts, &global_options_set, flag_tree_partial_pre, 1);
       SET_OPTION_IF_UNSET (opts, &global_options_set, flag_unroll_loops, 1);
       SET_OPTION_IF_UNSET (opts, &global_options_set, flag_unroll_all_loops, 1);
+      SET_OPTION_IF_UNSET (opts, &global_options_set, flag_unroll_jam, 1);
       SET_OPTION_IF_UNSET (opts, &global_options_set, flag_cunroll_grow_size, 1);
       SET_OPTION_IF_UNSET (opts, &global_options_set, flag_rename_registers, 1);
       SET_OPTION_IF_UNSET (opts, &global_options_set, flag_web, 1);
@@ -12113,6 +12114,14 @@ riscv_override_options_internal (struct gcc_options *opts)
 			   param_preunroll_factor, 2);
       SET_OPTION_IF_UNSET (opts, &global_options_set,
 			   param_max_inline_insns_auto, 100);
+      SET_OPTION_IF_UNSET (opts, &global_options_set,
+			   param_max_unrolled_insns, 6000);
+      SET_OPTION_IF_UNSET (opts, &global_options_set,
+			   param_unroll_jam_min_percent, 0);
+      SET_OPTION_IF_UNSET (opts, &global_options_set,
+			   param_unroll_jam_max_unroll, 8);
+      SET_OPTION_IF_UNSET (opts, &global_options_set,
+			   param_loop_kernel_inline_growth_limit, 8);
       if (!opts->x_str_align_functions)
 	{
 	  opts->x_str_align_functions = "1";

@@ -777,6 +777,63 @@ num_calls (struct cgraph_node *n)
   return num;
 }
 
+/* Return true if EDGE looks like a call from a dispatcher into a leaf loop
+   kernel where automatic inlining mostly trades a cheap call for duplicated
+   hot loop text.  The heuristic is disabled by default and is intended for
+   small-cache targets that set PARAM_LOOP_KERNEL_INLINE_GROWTH_LIMIT.  */
+
+static bool
+avoid_inline_loop_kernel_p (struct cgraph_edge *edge, int growth,
+			    int growth_limit,
+			    class ipa_fn_summary *callee_info,
+			    ipa_call_summary *call_info)
+{
+  if (!growth_limit)
+    return false;
+
+  struct cgraph_node *callee = edge->callee->ultimate_alias_target ();
+  struct cgraph_node *caller = (edge->caller->inlined_to
+				? edge->caller->inlined_to : edge->caller);
+
+  if (DECL_DECLARED_INLINE_P (callee->decl)
+      || DECL_DISREGARD_INLINE_LIMITS (callee->decl)
+      || growth <= growth_limit
+      || call_info->loop_depth != 0
+      || callee->callees
+      || callee->indirect_calls
+      || num_calls (caller) < 4)
+    return false;
+
+  return callee_info->time > (sreal) (callee_info->min_size * 32);
+}
+
+/* Return true if EDGE would inline a dispatcher that sequences several
+   nontrivial loop kernels.  Keeping such dispatchers out of small wrappers
+   prevents the later inline queue from duplicating the kernels in the wrapper
+   body, which is usually bad for very small instruction caches.  */
+
+static bool
+avoid_inline_loop_dispatcher_p (struct cgraph_edge *edge, int growth,
+				int growth_limit,
+				ipa_call_summary *call_info)
+{
+  if (!growth_limit)
+    return false;
+
+  struct cgraph_node *callee = edge->callee->ultimate_alias_target ();
+
+  if (DECL_DECLARED_INLINE_P (callee->decl)
+      || DECL_DISREGARD_INLINE_LIMITS (callee->decl)
+      || growth <= growth_limit
+      || call_info->loop_depth != 0
+      || !callee->callees
+      || callee->indirect_calls
+      || num_calls (callee) < 4)
+    return false;
+
+  return true;
+}
+
 
 /* Return true if we are interested in inlining small function.  */
 
@@ -1030,10 +1087,25 @@ want_inline_small_function_p (struct cgraph_edge *e, bool report)
 				   | INLINE_HINT_loop_iterations
 				   | INLINE_HINT_loop_stride));
       bool apply_hints2 = (hints & INLINE_HINT_builtin_constant_p);
+      int loop_kernel_inline_growth_limit
+	= opt_for_fn (to->decl, param_loop_kernel_inline_growth_limit);
 
       if (growth <= opt_for_fn (to->decl,
 				param_max_inline_insns_size))
 	;
+      else if (avoid_inline_loop_dispatcher_p
+	       (e, growth, loop_kernel_inline_growth_limit, call_info))
+	{
+	  e->inline_failed = CIF_MAX_INLINE_INSNS_AUTO_LIMIT;
+	  want_inline = false;
+	}
+      else if (avoid_inline_loop_kernel_p
+	       (e, growth, loop_kernel_inline_growth_limit, callee_info,
+		call_info))
+	{
+	  e->inline_failed = CIF_MAX_INLINE_INSNS_AUTO_LIMIT;
+	  want_inline = false;
+	}
       /* Apply param_max_inline_insns_single limit.  Do not do so when
 	 hints suggests that inlining given function is very profitable.
 	 Avoid computation of big_speedup_p when not necessary to change

@@ -241,6 +241,10 @@ The scale (as a percentage) applied to inline-insns-single and auto limits when 
 Common Joined UInteger Var(param_inline_min_speedup) Init(30) Optimization IntegerRange(0, 100) Param
 The minimal estimated speedup allowing inliner to ignore inline-insns-single and inline-insns-auto.
 
+-param=loop-kernel-inline-growth-limit=
+Common Joined UInteger Var(param_loop_kernel_inline_growth_limit) Init(0) Optimization Param
+Maximum positive growth for inlining expensive leaf loop kernels into dispatcher-like callers; 0 disables this limit.
+
 -param=inline-unit-growth=
 Common Joined UInteger Var(param_inline_unit_growth) Init(40) Optimization Param
 How much can given compilation unit grow because of the inlining (as a percentage).
