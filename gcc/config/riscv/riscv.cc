@@ -12096,10 +12096,17 @@ riscv_override_options_internal (struct gcc_options *opts)
      non-countable RTL path so tiny hot pointer loops are still caught without
      growing past the 2 KB I-cache.  Pre-IVOPTS unrolling by 2 lets IVOPTS fold
      paired memory operations into base+offset addressing without the cache
-     damage of larger factors.  Keep the secondary flags that -funroll-loops
-     would normally imply, since setting the flags here happens after common
-     option post-processing, but only when unrolling was not explicitly
-     disabled by the user.
+     damage of larger factors.  Limit unconditional IV candidate-set pruning:
+     retaining more of the initial address inductions avoids extra stack
+     temporaries and update chains in unrolled matrix loops.  Keep the
+     secondary flags that -funroll-loops would normally imply, since setting
+     the flags here happens after common option post-processing, but only when
+     unrolling was not explicitly disabled by the user.
+
+     Restrict load-after-store GCSE to compiler-generated, non-pointer stores.
+     This recovers values from loop-store-motion temporaries without extending
+     the live ranges of user pointer stores, which is especially costly with
+     the core's small register file and instruction cache.
 
      Disable speculative scheduling and RTL if-conversion.  The core has no
      conditional moves, cheap correctly-predicted branches, and an 8-entry BTB;
@@ -12116,6 +12123,9 @@ riscv_override_options_internal (struct gcc_options *opts)
       SET_OPTION_IF_UNSET (opts, &global_options_set,
 			   flag_guess_classification_branch_prob, 1);
       SET_OPTION_IF_UNSET (opts, &global_options_set, flag_tree_partial_pre, 1);
+      SET_OPTION_IF_UNSET (opts, &global_options_set, flag_gcse_las, 1);
+      SET_OPTION_IF_UNSET (opts, &global_options_set,
+			   param_gcse_las_generated_only, 1);
       /* Do not let the target's -funroll-all-loops default override an
 	 explicit -f[no-]unroll-loops.  Naming only the all-loops switch still
 	 retains the target's ordinary -funroll-loops default.  */
@@ -12140,6 +12150,8 @@ riscv_override_options_internal (struct gcc_options *opts)
       SET_OPTION_IF_UNSET (opts, &global_options_set,
 			   param_preunroll_factor, 2);
       SET_OPTION_IF_UNSET (opts, &global_options_set,
+			   param_iv_always_prune_cand_set_bound, 5);
+      SET_OPTION_IF_UNSET (opts, &global_options_set,
 			   param_max_inline_insns_auto, 100);
       SET_OPTION_IF_UNSET (opts, &global_options_set,
 			   param_max_unrolled_insns, 6000);
@@ -12151,8 +12163,6 @@ riscv_override_options_internal (struct gcc_options *opts)
 			   param_unroll_jam_allow_reductions, 1);
       SET_OPTION_IF_UNSET (opts, &global_options_set,
 			   param_unroll_jam_use_alias_sets, 1);
-      SET_OPTION_IF_UNSET (opts, &global_options_set,
-			   param_loop_kernel_inline_growth_limit, 8);
       if (!opts->x_str_align_functions)
 	{
 	  opts->x_str_align_functions = "1";

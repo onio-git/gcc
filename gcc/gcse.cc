@@ -1393,7 +1393,11 @@ hash_scan_set (rtx set, rtx_insn *insn, struct gcse_hash_table_d *table)
   else if (flag_gcse_las
 	   && !doing_hardreg_pre_p
 	   && REG_P (src)
-	   && MEM_P (dest))
+	   && MEM_P (dest)
+	   && (!param_gcse_las_generated_only
+	       || (INSN_LOCATION (insn) == UNKNOWN_LOCATION
+		   && (!MEM_EXPR (dest)
+		       || !POINTER_TYPE_P (TREE_TYPE (MEM_EXPR (dest)))))))
     {
       unsigned int regno = REGNO (src);
       HOST_WIDE_INT max_distance = 0;

@@ -10,6 +10,9 @@ the CPU design.
 - `results/2026-08-09-ulpmark-cm.md` records the current board result.
 - `review-2026-08-09.md` records the compiler-safety review and reproducible
   simulator screening performed against that baseline.
+- `results/2026-08-13-coremark-screening.md` records the follow-up compiler
+  search, the rejected candidates, and the new hash-controlled CoreMark
+  candidate awaiting board validation.
 
 ## Acceptance order
 

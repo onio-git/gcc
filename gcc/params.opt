@@ -177,6 +177,10 @@ The threshold ratio of critical edges execution count that permit performing red
 Common Joined UInteger Var(param_gcse_after_reload_partial_fraction) Init(3) Param Optimization
 The threshold ratio for performing partial redundancy elimination after reload.
 
+-param=gcse-las-generated-only=
+Common Joined UInteger Var(param_gcse_las_generated_only) Init(0) IntegerRange(0, 1) Param Optimization
+Restrict GCSE load-after-store elimination to compiler-generated non-pointer stores.
+
 -param=gcse-cost-distance-ratio=
 Common Joined UInteger Var(param_gcse_cost_distance_ratio) Init(10) Param Optimization
 Scaling factor in calculation of maximum distance an expression can be moved by GCSE optimizations.
