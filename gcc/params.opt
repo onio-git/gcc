@@ -1267,6 +1267,14 @@ The denominator n of fraction 1/n of the number of profiled runs of the entire p
 Common Joined UInteger Var(param_unroll_jam_max_unroll) Init(4) Param Optimization
 Maximum unroll factor for the unroll-and-jam transformation.
 
+-param=unroll-jam-allow-reductions=
+Common Joined UInteger Var(param_unroll_jam_allow_reductions) Init(0) IntegerRange(0, 1) Param Optimization
+Allow unroll-and-jam to fuse supported per-outer-iteration integer reductions.
+
+-param=unroll-jam-use-alias-sets=
+Common Joined UInteger Var(param_unroll_jam_use_alias_sets) Init(0) IntegerRange(0, 1) Param Optimization
+Use nonconflicting alias sets to prove unroll-and-jam data references independent.
+
 -param=unroll-jam-min-percent=
 Common Joined UInteger Var(param_unroll_jam_min_percent) Init(1) IntegerRange(0, 100) Param Optimization
 Minimum percentage of memrefs that must go away for unroll-and-jam to be considered profitable.

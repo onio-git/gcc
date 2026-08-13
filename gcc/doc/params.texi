@@ -242,6 +242,12 @@ the function can be inlined regardless of the limit on
 @option{--param max-inline-insns-single} and @option{--param
 max-inline-insns-auto}.
 
+@paindex loop-kernel-inline-growth-limit
+@item loop-kernel-inline-growth-limit
+The maximum positive size growth accepted when automatically inlining an
+expensive leaf loop kernel into a dispatcher-like caller, or such a dispatcher
+into a wrapper.  A value of zero disables this small-cache heuristic.
+
 @paindex large-function-insns
 @item large-function-insns
 The limit specifying really large functions.  For functions larger than this
@@ -1601,6 +1607,26 @@ away for the unroll-and-jam transformation to be considered profitable.
 @item unroll-jam-max-unroll
 The maximum number of times the outer loop should be unrolled by
 the unroll-and-jam transformation.
+
+@paindex unroll-jam-allow-reductions
+@item unroll-jam-allow-reductions
+Whether the unroll-and-jam transformation may fuse supported integer
+reductions that are independently initialized for each outer-loop iteration.
+
+@paindex unroll-jam-use-alias-sets
+@item unroll-jam-use-alias-sets
+Whether the unroll-and-jam transformation may use nonconflicting alias sets
+to prove that data references are independent.
+
+@paindex preunroll-factor
+@item preunroll-factor
+The factor by which eligible innermost loops are unrolled before IV
+optimization.  A value of one disables this transformation.
+
+@paindex preunroll-max-stmts
+@item preunroll-max-stmts
+The maximum number of GIMPLE statements in an innermost loop eligible for
+unrolling before IV optimization.
 
 @paindex max-rtl-if-conversion-unpredictable-cost
 @item max-rtl-if-conversion-unpredictable-cost

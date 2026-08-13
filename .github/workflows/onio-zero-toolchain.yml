@@ -22,7 +22,9 @@ permissions:
 
 env:
   BINUTILS_VER: "2.43"
+  BINUTILS_SHA256: "b53606f443ac8f01d1d5fc9c39497f2af322d99e14cea5c0b4b124d630379365"
   NEWLIB_VER: "4.4.0.20231231"
+  NEWLIB_SHA256: "0c166a39e1bf0951dfafcd68949fe0e4b6d3658081d6282f39aeefc6310f2f13"
   TARGET: riscv32-unknown-elf
   ARCH: rv32imc_zicsr_zba_zbb_zbs_zifencei
   ABI: ilp32
@@ -80,6 +82,13 @@ jobs:
           set -eux
           wget -q https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VER}.tar.xz
           wget -q https://sourceware.org/pub/newlib/newlib-${NEWLIB_VER}.tar.gz
+          if command -v sha256sum >/dev/null 2>&1; then
+            echo "$BINUTILS_SHA256  binutils-${BINUTILS_VER}.tar.xz" | sha256sum -c -
+            echo "$NEWLIB_SHA256  newlib-${NEWLIB_VER}.tar.gz" | sha256sum -c -
+          else
+            echo "$BINUTILS_SHA256  binutils-${BINUTILS_VER}.tar.xz" | shasum -a 256 -c -
+            echo "$NEWLIB_SHA256  newlib-${NEWLIB_VER}.tar.gz" | shasum -a 256 -c -
+          fi
           tar xf binutils-${BINUTILS_VER}.tar.xz
           tar xf newlib-${NEWLIB_VER}.tar.gz
 
@@ -108,7 +117,8 @@ jobs:
           # 2. gcc compiler + libgcc
           mkdir build-gcc && cd build-gcc
           "$GCCSRC/configure" --target="$TARGET" --prefix="$PREFIX" \
-            --with-arch="$ARCH" --with-abi="$ABI" --disable-multilib \
+            --with-arch="$ARCH" --with-abi="$ABI" --with-tune=onio-zero \
+            --disable-multilib \
             --enable-languages=c --with-newlib --without-headers \
             --disable-shared --disable-threads --disable-nls \
             --disable-libssp --disable-libquadmath --disable-libgomp
@@ -128,6 +138,37 @@ jobs:
           printf 'int main(void){return 0;}\n' > sanity.c
           "$PREFIX/bin/$TARGET-gcc" -mcpu=onio-zero -O2 sanity.c -o sanity.elf
           "$PREFIX/bin/$TARGET-size" sanity.elf
+
+          # 5. custom-pass regression: volatile user stack objects are not
+          # allocator spill slots and must remain inside their loops.
+          mkdir sanity-tests
+          cd sanity-tests
+          "$PREFIX/bin/$TARGET-gcc" -O2 -mcpu=onio-zero \
+            -fno-unroll-loops -fno-unroll-all-loops \
+            -fdump-rtl-spillmotion-details -S \
+            "$GCCSRC/gcc/testsuite/gcc.target/riscv/onio-zero-spill-motion-volatile.c" \
+            -o spill-volatile.s
+          set -- ./*.spillmotion
+          test -f "$1"
+          if grep -E "invariant reload|exit-only store" -- "$@"; then
+            echo "loop-spill-motion changed a volatile user object" >&2
+            exit 1
+          fi
+
+          # Reduction-aware unroll-and-jam must transform only the independently
+          # initialized reduction, not a shared accumulator or a nest with an
+          # unrelated store in the outer body.
+          "$PREFIX/bin/$TARGET-gcc" -O3 -mcpu=onio-zero \
+            -floop-unroll-and-jam -fno-tree-loop-distribute-patterns \
+            -fno-tree-vectorize --param unroll-jam-min-percent=0 \
+            --param unroll-jam-max-unroll=4 \
+            --param unroll-jam-allow-reductions=1 \
+            -fdump-tree-unrolljam-details -S \
+            "$GCCSRC/gcc/testsuite/gcc.dg/unroll-and-jam-reduction.c" \
+            -o unroll-jam-reduction.s
+          count=$(grep -h "applying unroll and jam" ./*.unrolljam | wc -l | tr -d ' ')
+          test "$count" -eq 1
+          cd "$GCCSRC"
 
       # The MSYS2-built .exe files link against MinGW runtime DLLs that live
       # in /mingw64/bin, not in the prefix.  Copy each DLL next to every

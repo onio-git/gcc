@@ -22,13 +22,16 @@
 #include "coretypes.h"
 #include "backend.h"
 #include "rtl.h"
+#include "tree.h"
 #include "df.h"
 #include "memmodel.h"
 #include "tm_p.h"
 #include "insn-config.h"
 #include "regs.h"
 #include "emit-rtl.h"
+#include "expr.h"
 #include "recog.h"
+#include "predict.h"
 #include "diagnostic-core.h"
 #include "addresses.h"
 #include "tree-pass.h"
@@ -1572,7 +1575,12 @@ public:
   pass_sink_liveout_copies (gcc::context *ctxt)
     : rtl_opt_pass (pass_data_sink_liveout_copies, ctxt)
   {}
-  bool gate (function *) final override { return optimize >= 2; }
+  bool gate (function *fun) final override
+  {
+    return (optimize >= 2
+	    && flag_sink_liveout_copies
+	    && optimize_function_for_speed_p (fun));
+  }
   unsigned int execute (function *) final override;
 };
 
@@ -1593,8 +1601,10 @@ pass_sink_liveout_copies::execute (function *fun)
       rtx_insn *copy = prev_nonnote_nondebug_insn (jump);
       if (!copy || !NONJUMP_INSN_P (copy) || BLOCK_FOR_INSN (copy) != bb)
 	continue;
-      rtx set = single_set (copy);
-      if (!set)
+      if (RTX_FRAME_RELATED_P (copy))
+	continue;
+      rtx set = PATTERN (copy);
+      if (GET_CODE (set) != SET)
 	continue;
       rtx dst = SET_DEST (set), src = SET_SRC (set);
       if (!REG_P (dst) || !REG_P (src))
@@ -1640,12 +1650,13 @@ pass_sink_liveout_copies::execute (function *fun)
   sink_cand *c;
   FOR_EACH_VEC_ELT (todo, i, c)
     {
-      rtx set = single_set (c->copy);
+      rtx set = PATTERN (c->copy);
       start_sequence ();
-      emit_insn (gen_rtx_SET (copy_rtx (SET_DEST (set)),
-			      copy_rtx (SET_SRC (set))));
+      emit_insn (gen_move_insn (copy_rtx (SET_DEST (set)),
+				copy_rtx (SET_SRC (set))));
       rtx_insn *seq = get_insns ();
       end_sequence ();
+      set_insn_locations (seq, INSN_LOCATION (c->copy));
       insert_insn_on_edge (seq, c->e);
       delete_insn (c->copy);
     }

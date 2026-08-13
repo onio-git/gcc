@@ -2851,30 +2851,76 @@ get_predictor_value (br_predictor predictor, HOST_WIDE_INT probability)
    constants and is therefore usually false; the | combining is all that hides
    it from the plain opcode heuristic below.  */
 
-static bool
-expr_is_const_set_membership (tree op)
+static tree
+const_set_membership_value (tree op)
 {
   if (TREE_CODE (op) != SSA_NAME)
-    return false;
+    return NULL_TREE;
   gimple *def = SSA_NAME_DEF_STMT (op);
   if (!is_gimple_assign (def))
-    return false;
+    return NULL_TREE;
   switch (gimple_assign_rhs_code (def))
     {
     case BIT_IOR_EXPR:
-      return expr_is_const_set_membership (gimple_assign_rhs1 (def))
-	     && expr_is_const_set_membership (gimple_assign_rhs2 (def));
+
+      {
+	tree lhs = const_set_membership_value (gimple_assign_rhs1 (def));
+	tree rhs = const_set_membership_value (gimple_assign_rhs2 (def));
+	return lhs && rhs && operand_equal_p (lhs, rhs, 0) ? lhs : NULL_TREE;
+      }
+
     case EQ_EXPR:
       {
-	tree a = gimple_assign_rhs1 (def);
-	tree b = gimple_assign_rhs2 (def);
-	return INTEGRAL_TYPE_P (TREE_TYPE (a))
-	       && TREE_CODE (b) == INTEGER_CST
-	       && !integer_zerop (b);
+	tree value = gimple_assign_rhs1 (def);
+	tree constant = gimple_assign_rhs2 (def);
+	if (TREE_CODE (value) == INTEGER_CST)
+	  std::swap (value, constant);
+	return (TREE_CODE (constant) == INTEGER_CST
+		&& !integer_zerop (constant)
+		&& INTEGRAL_TYPE_P (TREE_TYPE (value))) ? value : NULL_TREE;
       }
+
     default:
-      return false;
+      return NULL_TREE;
     }
+}
+
+static bool
+expr_is_const_set_membership (tree op)
+{
+  return const_set_membership_value (op) != NULL_TREE;
+}
+
+/* True if OP is an SSA value formed by adding or subtracting an integer
+   constant.  Classification range tests normally have this offset form;
+   requiring it avoids assigning classification behavior to every unsigned
+   comparison against a small constant.  Look through conversion assignments
+   introduced by the usual (unsigned) (C - BASE) idiom.  */
+
+static bool
+expr_is_offset_value (tree op)
+{
+  for (unsigned int depth = 0; depth < 3; ++depth)
+    {
+      if (TREE_CODE (op) != SSA_NAME)
+	return false;
+      gimple *def = SSA_NAME_DEF_STMT (op);
+      if (!is_gimple_assign (def))
+	return false;
+
+      enum tree_code code = gimple_assign_rhs_code (def);
+      if ((code == PLUS_EXPR
+	   && (TREE_CODE (gimple_assign_rhs1 (def)) == INTEGER_CST
+	       || TREE_CODE (gimple_assign_rhs2 (def)) == INTEGER_CST))
+	  || (code == MINUS_EXPR
+	      && TREE_CODE (gimple_assign_rhs2 (def)) == INTEGER_CST))
+	return true;
+
+      if (!CONVERT_EXPR_CODE_P (code))
+	return false;
+      op = gimple_assign_rhs1 (def);
+    }
+  return false;
 }
 
 /* True if OP is (X & M) where M is a byte mask with at most two of the low
@@ -2893,10 +2939,16 @@ expr_is_masked_set_membership (tree op)
   if (!is_gimple_assign (def)
       || gimple_assign_rhs_code (def) != BIT_AND_EXPR)
     return false;
+  tree value = gimple_assign_rhs1 (def);
   tree m = gimple_assign_rhs2 (def);
-  if (TREE_CODE (m) != INTEGER_CST)
+  if (TREE_CODE (value) == INTEGER_CST)
+    std::swap (value, m);
+  if (TREE_CODE (m) != INTEGER_CST
+      || !tree_fits_uhwi_p (m)
+      || tree_to_uhwi (m) > 255
+      || !expr_is_offset_value (value))
     return false;
-  unsigned HOST_WIDE_INT mv = TREE_INT_CST_LOW (m) & 0xff;
+  unsigned HOST_WIDE_INT mv = tree_to_uhwi (m);
   /* >= 6 set bits among the low 8 => the in-set is at most four values.  */
   return INTEGRAL_TYPE_P (TREE_TYPE (op)) && popcount_hwi (mv) >= 6;
 }
@@ -2983,13 +3035,19 @@ tree_predict_by_opcode (basic_block bb)
 	/* A set-membership test (x == C1) | (x == C2) | ... compared == 0 is
 	   true exactly when the value is in none of the sets, which is the
 	   usual case, so predict the then edge taken.  */
-	else if ((integer_zerop (op1) && expr_is_const_set_membership (op0))
-		 || (integer_zerop (op0) && expr_is_const_set_membership (op1)))
+	else if (flag_guess_classification_branch_prob
+		 && ((integer_zerop (op1)
+		      && expr_is_const_set_membership (op0))
+		     || (integer_zerop (op0)
+			 && expr_is_const_set_membership (op1))))
 	  predict_edge_def (then_edge, PRED_TREE_OPCODE_NONEQUAL, TAKEN);
 	/* The reassociated bit-mask form of a membership test is zero exactly
 	   when the value is in the (small) set, so == 0 is usually false.  */
-	else if ((integer_zerop (op1) && expr_is_masked_set_membership (op0))
-		 || (integer_zerop (op0) && expr_is_masked_set_membership (op1)))
+	else if (flag_guess_classification_branch_prob
+		 && ((integer_zerop (op1)
+		      && expr_is_masked_set_membership (op0))
+		     || (integer_zerop (op0)
+			 && expr_is_masked_set_membership (op1))))
 	  predict_edge_def (then_edge, PRED_TREE_OPCODE_NONEQUAL, NOT_TAKEN);
 	/* Comparisons with 0 are often used for booleans and there is
 	   nothing useful to predict about them.  */
@@ -3009,13 +3067,19 @@ tree_predict_by_opcode (basic_block bb)
 	/* A set-membership test (x == C1) | (x == C2) | ... compared != 0 is
 	   true exactly when the value is in one of the sets, which is usually
 	   not the case, so predict the then edge not taken.  */
-	else if ((integer_zerop (op1) && expr_is_const_set_membership (op0))
-		 || (integer_zerop (op0) && expr_is_const_set_membership (op1)))
+	else if (flag_guess_classification_branch_prob
+		 && ((integer_zerop (op1)
+		      && expr_is_const_set_membership (op0))
+		     || (integer_zerop (op0)
+			 && expr_is_const_set_membership (op1))))
 	  predict_edge_def (then_edge, PRED_TREE_OPCODE_NONEQUAL, NOT_TAKEN);
 	/* The bit-mask form is nonzero exactly when the value is not in the
 	   small set, the usual case, so != 0 is usually true.  */
-	else if ((integer_zerop (op1) && expr_is_masked_set_membership (op0))
-		 || (integer_zerop (op0) && expr_is_masked_set_membership (op1)))
+	else if (flag_guess_classification_branch_prob
+		 && ((integer_zerop (op1)
+		      && expr_is_masked_set_membership (op0))
+		     || (integer_zerop (op0)
+			 && expr_is_masked_set_membership (op1))))
 	  predict_edge_def (then_edge, PRED_TREE_OPCODE_NONEQUAL, TAKEN);
 	/* Comparisons with 0 are often used for booleans and there is
 	   nothing useful to predict about them.  */
@@ -3047,7 +3111,9 @@ tree_predict_by_opcode (basic_block bb)
 	   typically a value/character classification range check, e.g.
 	   isdigit() compiled to (unsigned)(c - '0') <= 9.  Such checks
 	   usually succeed, so predict the in-range (then) edge taken.  */
-	else if (TYPE_UNSIGNED (type)
+	else if (flag_guess_classification_branch_prob
+		 && TYPE_UNSIGNED (type)
+		 && expr_is_offset_value (op0)
 		 && TREE_CODE (op1) == INTEGER_CST
 		 && tree_fits_uhwi_p (op1)
 		 && tree_to_uhwi (op1) >= 2
@@ -3068,7 +3134,9 @@ tree_predict_by_opcode (basic_block bb)
 	   comparison >/>= a small positive constant (e.g. !isdigit compiled
 	   to (unsigned)(c - '0') > 9) is usually false, so predict the
 	   out-of-range (then) edge not taken.  */
-	else if (TYPE_UNSIGNED (type)
+	else if (flag_guess_classification_branch_prob
+		 && TYPE_UNSIGNED (type)
+		 && expr_is_offset_value (op0)
 		 && TREE_CODE (op1) == INTEGER_CST
 		 && tree_fits_uhwi_p (op1)
 		 && tree_to_uhwi (op1) >= 2

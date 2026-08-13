@@ -11995,6 +11995,14 @@ riscv_override_options_internal (struct gcc_options *opts)
   const char *tune_string = get_tune_str (opts);
   cpu = riscv_parse_tune (tune_string, false);
   riscv_microarchitecture = cpu->microarchitecture;
+  /* An explicit -march can add V while retaining -mcpu=onio-zero as the
+     tune.  Aldebaran has no vector unit, so its DFA deliberately has no RVV
+     reservations; using it for this artificial ISA/tune combination would
+     make the scheduler assert on every vector insn.  Fall back to the generic
+     DFA for scheduling only.  The selected tune costs and ordinary
+     onio-zero code generation remain unchanged.  */
+  if (riscv_microarchitecture == onio_zero && TARGET_VECTOR_OPTS_P (opts))
+    riscv_microarchitecture = generic;
   if (riscv_microarchitecture == spacemit_x60)
     opts->x_TARGET_ADJUST_LMUL_COST = 1;
   tune_param = opts->x_optimize_size
@@ -12090,22 +12098,41 @@ riscv_override_options_internal (struct gcc_options *opts)
      paired memory operations into base+offset addressing without the cache
      damage of larger factors.  Keep the secondary flags that -funroll-loops
      would normally imply, since setting the flags here happens after common
-     option post-processing.
+     option post-processing, but only when unrolling was not explicitly
+     disabled by the user.
 
      Disable speculative scheduling and RTL if-conversion.  The core has no
      conditional moves, cheap correctly-predicted branches, and an 8-entry BTB;
      measured CoreMark runs favor explicit branches and less speculative motion
      over branchless/select-like instruction sequences.  */
-  if (cpu->tune_param == &onio_zero_tune_info && opts->x_optimize >= 2)
+  if (cpu->tune_param == &onio_zero_tune_info
+      && opts->x_optimize >= 2
+      && !opts->x_optimize_size)
     {
       SET_OPTION_IF_UNSET (opts, &global_options_set, flag_gcse_after_reload, 1);
+      SET_OPTION_IF_UNSET (opts, &global_options_set, flag_loop_spill_motion, 1);
+      SET_OPTION_IF_UNSET (opts, &global_options_set,
+			   flag_sink_liveout_copies, 1);
+      SET_OPTION_IF_UNSET (opts, &global_options_set,
+			   flag_guess_classification_branch_prob, 1);
       SET_OPTION_IF_UNSET (opts, &global_options_set, flag_tree_partial_pre, 1);
-      SET_OPTION_IF_UNSET (opts, &global_options_set, flag_unroll_loops, 1);
-      SET_OPTION_IF_UNSET (opts, &global_options_set, flag_unroll_all_loops, 1);
+      /* Do not let the target's -funroll-all-loops default override an
+	 explicit -f[no-]unroll-loops.  Naming only the all-loops switch still
+	 retains the target's ordinary -funroll-loops default.  */
+      if (!OPTION_SET_P (flag_unroll_loops))
+	opts->x_flag_unroll_loops = 1;
+      if (!OPTION_SET_P (flag_unroll_loops)
+	  && !OPTION_SET_P (flag_unroll_all_loops))
+	opts->x_flag_unroll_all_loops = 1;
       SET_OPTION_IF_UNSET (opts, &global_options_set, flag_unroll_jam, 1);
-      SET_OPTION_IF_UNSET (opts, &global_options_set, flag_cunroll_grow_size, 1);
-      SET_OPTION_IF_UNSET (opts, &global_options_set, flag_rename_registers, 1);
-      SET_OPTION_IF_UNSET (opts, &global_options_set, flag_web, 1);
+      if (opts->x_flag_unroll_loops)
+	{
+	  SET_OPTION_IF_UNSET (opts, &global_options_set,
+			       flag_cunroll_grow_size, 1);
+	  SET_OPTION_IF_UNSET (opts, &global_options_set,
+			       flag_rename_registers, 1);
+	  SET_OPTION_IF_UNSET (opts, &global_options_set, flag_web, 1);
+	}
       SET_OPTION_IF_UNSET (opts, &global_options_set,
 			   flag_schedule_speculative, 0);
       SET_OPTION_IF_UNSET (opts, &global_options_set, flag_if_conversion, 0);
@@ -12120,6 +12147,10 @@ riscv_override_options_internal (struct gcc_options *opts)
 			   param_unroll_jam_min_percent, 0);
       SET_OPTION_IF_UNSET (opts, &global_options_set,
 			   param_unroll_jam_max_unroll, 8);
+      SET_OPTION_IF_UNSET (opts, &global_options_set,
+			   param_unroll_jam_allow_reductions, 1);
+      SET_OPTION_IF_UNSET (opts, &global_options_set,
+			   param_unroll_jam_use_alias_sets, 1);
       SET_OPTION_IF_UNSET (opts, &global_options_set,
 			   param_loop_kernel_inline_growth_limit, 8);
       if (!opts->x_str_align_functions)

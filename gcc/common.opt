@@ -1235,6 +1235,10 @@ fbranch-probabilities
 Common Var(flag_branch_probabilities) Optimization
 Use profiling information for branch probabilities.
 
+fbranch-layout-profile=
+Common Joined RejectNegative Var(branch_layout_profile_file)
+Use branch counts from the named file to guide conditional fall-through layout.
+
 fbranch-target-load-optimize
 Common Ignore
 Does nothing.  Preserved for backward compatibility.
@@ -1868,7 +1872,11 @@ finished.
 
 floop-spill-motion
 Common Var(flag_loop_spill_motion) Optimization
-Move loop-invariant spill-slot reloads and exit-only spill-slot stores out of loops after reload.
+Move spill-slot reloads and stores out of loops after reload.
+
+fsink-liveout-copies
+Common Var(flag_sink_liveout_copies) Optimization
+Sink partially dead hard-register copies onto the edge where they are needed.
 
 Enum
 Name(dwarf_gnat_encodings) Type(int)
@@ -1964,6 +1972,10 @@ Merge adjacent stores.
 fguess-branch-probability
 Common Var(flag_guess_branch_prob) Optimization
 Enable guessing of branch probabilities.
+
+fguess-classification-branch-probability
+Common Var(flag_guess_classification_branch_prob) Optimization
+Guess probabilities of integer classification and small set-membership tests.
 
 fhardened
 Common Driver Var(flag_hardened)

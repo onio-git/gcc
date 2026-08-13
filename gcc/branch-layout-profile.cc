@@ -7,7 +7,7 @@
 
    Profile lines: "basename:line:disc>targetline taken total".  The target line
    disambiguates tail-duplicated copies that share branch line:disc but jump to
-   different continuations.  Enabled when env BRANCH_PROFILE names a file. */
+   different continuations.  Enabled by -fbranch-layout-profile=FILE.  */
 
 #include "config.h"
 #include "system.h"
@@ -15,14 +15,39 @@
 #include "backend.h"
 #include "tree.h"
 #include "gimple.h"
+#include "diagnostic-core.h"
 #include "cfghooks.h"
 #include "gimple-iterator.h"
 #include "tree-cfg.h"
 #include <map>
 #include <string>
 
-static std::map<std::string, std::pair<long, long> > *blp_map;
+typedef std::pair<unsigned long long, unsigned long long> blp_count;
+static std::map<std::string, blp_count> *blp_map;
 static bool blp_tried;
+
+/* Parse an unsigned decimal counter without accepting signs or wrapping on
+   overflow (strtoull accepts a leading minus sign).  */
+
+static bool
+blp_parse_count (const char *text, unsigned long long *result)
+{
+  if (!*text)
+    return false;
+
+  unsigned long long value = 0;
+  for (const unsigned char *p = (const unsigned char *) text; *p; ++p)
+    {
+      if (!ISDIGIT (*p))
+	return false;
+      unsigned int digit = *p - '0';
+      if (value > (~0ULL - digit) / 10)
+	return false;
+      value = value * 10 + digit;
+    }
+  *result = value;
+  return true;
+}
 
 static void
 blp_load (void)
@@ -30,17 +55,56 @@ blp_load (void)
   if (blp_tried)
     return;
   blp_tried = true;
-  const char *path = getenv ("BRANCH_PROFILE");
+  const char *path = branch_layout_profile_file;
   if (!path)
     return;
   FILE *f = fopen (path, "r");
   if (!f)
-    return;
-  blp_map = new std::map<std::string, std::pair<long, long> > ();
-  char key[600];
-  long t, e;
-  while (fscanf (f, "%599s %ld %ld", key, &t, &e) == 3)
-    (*blp_map)[std::string (key)] = std::make_pair (t, e);
+    {
+      error ("cannot open branch layout profile %qs: %m", path);
+      return;
+    }
+
+  blp_map = new std::map<std::string, blp_count> ();
+  char line[1024];
+  unsigned int lineno = 0;
+  while (fgets (line, sizeof line, f))
+    {
+      lineno++;
+      if (!strchr (line, '\n') && !feof (f))
+	{
+	  error ("branch layout profile %qs:%u has an overlong line",
+		 path, lineno);
+	  break;
+	}
+
+      char *comment = strchr (line, '#');
+      if (comment)
+	*comment = '\0';
+      char *p = line;
+      while (ISSPACE (*p))
+	p++;
+      if (!*p)
+	continue;
+
+      char key[600], taken_text[64], total_text[64], extra;
+      unsigned long long taken, total;
+      if (sscanf (p, "%599s %63s %63s %c", key, taken_text, total_text,
+		  &extra) != 3
+	  || !blp_parse_count (taken_text, &taken)
+	  || !blp_parse_count (total_text, &total))
+	{
+	  error ("malformed branch layout profile entry at %qs:%u",
+		 path, lineno);
+	  continue;
+	}
+      if (!total || taken > total)
+	{
+	  error ("invalid branch counts at %qs:%u", path, lineno);
+	  continue;
+	}
+      (*blp_map)[std::string (key)] = std::make_pair (taken, total);
+    }
   fclose (f);
 }
 
@@ -74,41 +138,6 @@ blp_bb_line (basic_block bb)
 void
 apply_branch_layout_profile (void)
 {
-  /* Forced-flip probe: swap the two successor edge probabilities of every
-     conditional in the named function(s), so bb-reorder rotates the OTHER
-     successor to fall-through.  FSM_FLIP names a function (substring match) or
-     "ALL".  This is a deliberate anti-layout test for the hot branches the
-     data-driven profile cannot key -- e.g. tail-duplicated FSM copies whose
-     split taken-rates straddle the filter and get rejected.  */
-  const char *flip = getenv ("FSM_FLIP");
-  if (flip && cfun && cfun->decl && DECL_NAME (cfun->decl))
-    {
-      const char *fn = IDENTIFIER_POINTER (DECL_NAME (cfun->decl));
-      if (!strcmp (flip, "ALL") || strstr (flip, fn))
-	{
-	  basic_block bb;
-	  int n = 0;
-	  FOR_EACH_BB_FN (bb, cfun)
-	    {
-	      gimple_stmt_iterator gsi = gsi_last_bb (bb);
-	      while (!gsi_end_p (gsi) && is_gimple_debug (gsi_stmt (gsi)))
-		gsi_prev (&gsi);
-	      gimple *stmt = gsi_end_p (gsi) ? NULL : gsi_stmt (gsi);
-	      if (!stmt || gimple_code (stmt) != GIMPLE_COND)
-		continue;
-	      if (EDGE_COUNT (bb->succs) != 2)
-		continue;
-	      edge e0 = EDGE_SUCC (bb, 0), e1 = EDGE_SUCC (bb, 1);
-	      profile_probability p = e0->probability;
-	      e0->probability = e1->probability;
-	      e1->probability = p;
-	      n++;
-	    }
-	  if (getenv ("FSM_FLIP_DEBUG"))
-	    fprintf (stderr, "FSM_FLIP: %s swapped %d conds\n", fn, n);
-	  return;
-	}
-    }
   blp_load ();
   if (!blp_map)
     return;
@@ -130,27 +159,25 @@ apply_branch_layout_profile (void)
       if (!xl.file)
 	continue;
       int disc = get_discriminator_from_loc (loc);
-      char base[450];
-      snprintf (base, sizeof base, "%s:%d:%d", lbasename (xl.file), xl.line, disc);
+      std::string base = (std::string (lbasename (xl.file)) + ":"
+			  + std::to_string (xl.line) + ":"
+			  + std::to_string (disc));
 
       edge e0 = EDGE_SUCC (bb, 0), e1 = EDGE_SUCC (bb, 1);
-      char k0[520], k1[520];
-      snprintf (k0, sizeof k0, "%s>%d", base, blp_bb_line (e0->dest));
-      snprintf (k1, sizeof k1, "%s>%d", base, blp_bb_line (e1->dest));
-      std::map<std::string, std::pair<long, long> >::iterator
-	it0 = blp_map->find (std::string (k0)),
-	it1 = blp_map->find (std::string (k1)),
+      std::string k0 = base + ">" + std::to_string (blp_bb_line (e0->dest));
+      std::string k1 = base + ">" + std::to_string (blp_bb_line (e1->dest));
+      std::map<std::string, blp_count>::iterator
+	it0 = blp_map->find (k0),
+	it1 = blp_map->find (k1),
 	end = blp_map->end ();
 
       edge taken = NULL;
-      long t = 0, total = 0;
+      unsigned long long t = 0, total = 0;
       if (it0 != end && it1 == end)
 	{ taken = e0; t = it0->second.first; total = it0->second.second; }
       else if (it1 != end && it0 == end)
 	{ taken = e1; t = it1->second.first; total = it1->second.second; }
       else
-	continue;
-      if (total <= 0)
 	continue;
       int v = (int) ((double) t * REG_BR_PROB_BASE / total + 0.5);
       if (v < 1)

@@ -605,6 +605,7 @@ Objective-C and Objective-C++ Dialects}.
 -fno-allocation-dce  -fallow-store-data-races
 -fassociative-math  -fauto-profile  -fauto-profile[=@var{path}]
 -fauto-profile-inlining  -fauto-inc-dec  -fbranch-probabilities
+-fbranch-layout-profile=@var{file}
 -fcaller-saves
 -fcombine-stack-adjustments  -fconserve-stack
 -ffold-mem-offsets
@@ -621,6 +622,7 @@ Objective-C and Objective-C++ Dialects}.
 -fforward-propagate  -ffp-contract=@var{style}  -ffp-int-builtin-inexact
 -ffunction-sections  -ffuse-ops-with-volatile-access
 -fgcse  -fgcse-after-reload  -fgcse-las  -fgcse-lm  -fgraphite-identity
+-fguess-classification-branch-probability
 -fgcse-sm  -fhoist-adjacent-loads  -fif-conversion
 -fif-conversion2  -findirect-inlining
 -finline-atomics  -finline-functions  -finline-functions-called-once
@@ -640,7 +642,7 @@ Objective-C and Objective-C++ Dialects}.
 -fivopts  -fkeep-inline-functions  -fkeep-static-functions
 -fkeep-static-consts  -flimit-function-alignment  -flive-range-shrinkage
 -floop-block  -floop-interchange  -floop-strip-mine
--floop-unroll-and-jam  -floop-nest-optimize
+-floop-unroll-and-jam  -floop-nest-optimize  -floop-spill-motion
 -floop-parallelize-all  -flra-remat  -flto  -flto-compression-level=@var{n}
 -flto-toplevel-asm-heuristics
 -flto-partition=@var{alg}  -flto-incremental=@var{path}
@@ -674,7 +676,7 @@ Objective-C and Objective-C++ Dialects}.
 -fselective-scheduling  -fselective-scheduling2
 -fsel-sched-pipelining  -fsel-sched-pipelining-outer-loops
 -fsemantic-interposition  -fshrink-wrap  -fshrink-wrap-separate
--fsignaling-nans
+-fsignaling-nans  -fsink-liveout-copies
 -fsingle-precision-constant  -fsplit-ivs-in-unroller  -fsplit-loops
 -fspeculatively-call-stored-functions  -fsplit-paths
 -fsplit-wide-types  -fsplit-wide-types-early  -fssa-backprop  -fssa-phiopt
@@ -15568,6 +15570,15 @@ with @code{__builtin_expect_with_probability} built-in function.
 The default is @option{-fguess-branch-probability} at levels
 @option{-O}, @option{-O2}, @option{-O3}, @option{-Os}.
 
+@opindex fguess-classification-branch-probability
+@opindex fno-guess-classification-branch-probability
+@item -fguess-classification-branch-probability
+Guess branch probabilities for recognized integer range-classification and
+small constant set-membership idioms.  This augments
+@option{-fguess-branch-probability}; it is enabled by default when optimizing
+for speed with @option{-mcpu=onio-zero} or @option{-mtune=onio-zero} at
+@option{-O2} or higher.
+
 @opindex freorder-blocks
 @opindex fno-reorder-blocks
 @item -freorder-blocks
@@ -16655,6 +16666,35 @@ performance, but are not enabled by any @option{-O} options.  This
 section includes experimental options that may produce broken code.
 
 @table @gcctabopt
+@opindex floop-spill-motion
+@opindex fno-loop-spill-motion
+@item -floop-spill-motion
+After register allocation, hoist invariant reloads from allocator-created spill
+slots and sink exit-only spill stores when the corresponding hard-register and
+control-flow conditions prove the move safe.  This option is experimental and
+is enabled by default when optimizing for speed with
+@option{-mcpu=onio-zero} or @option{-mtune=onio-zero} at @option{-O2} or
+higher.
+
+@opindex fsink-liveout-copies
+@opindex fno-sink-liveout-copies
+@item -fsink-liveout-copies
+After register allocation, move a partially dead hard-register copy from a
+two-way branch block to the single normal edge on which its destination is
+live.  This option is experimental and is enabled by default when optimizing
+for speed with @option{-mcpu=onio-zero} or @option{-mtune=onio-zero} at
+@option{-O2} or higher.
+
+@opindex fbranch-layout-profile
+@item -fbranch-layout-profile=@var{file}
+Read measured conditional-branch counts from @var{file} and use them to choose
+fall-through edges during block layout.  Each non-comment line has the form
+@samp{@var{source}:@var{line}:@var{discriminator}>@var{target-line}
+@var{taken} @var{total}}.  @var{source} is the source basename.  The source,
+compiler options, and profile-generation method must match the compilation;
+stale counts can make layout worse.  This is a lightweight layout-only format,
+not a replacement for GCC's validated profile-guided optimization formats.
+
 @opindex fbranch-probabilities
 @opindex fno-branch-probabilities
 @item -fbranch-probabilities

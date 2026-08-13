@@ -116,9 +116,11 @@ jam_reduction_phi_p (class loop *loop, gphi *phi)
   if (simple_iv (loop, loop, res, &iv, true))
     return false;
   edge le = loop_latch_edge (loop);
-  if (!le) return false;
+  if (!le)
+    return false;
   tree latch = PHI_ARG_DEF_FROM_EDGE (phi, le);
-  if (TREE_CODE (latch) != SSA_NAME) return false;
+  if (TREE_CODE (latch) != SSA_NAME)
+    return false;
   gimple *def = SSA_NAME_DEF_STMT (latch);
   while (is_gimple_assign (def)
 	 && CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (def))
@@ -127,7 +129,8 @@ jam_reduction_phi_p (class loop *loop, gphi *phi)
 	 && (TYPE_PRECISION (TREE_TYPE (gimple_assign_lhs (def)))
 	     == TYPE_PRECISION (TREE_TYPE (gimple_assign_rhs1 (def)))))
     def = SSA_NAME_DEF_STMT (gimple_assign_rhs1 (def));
-  if (!is_gimple_assign (def)) return false;
+  if (!is_gimple_assign (def))
+    return false;
   enum tree_code code = gimple_assign_rhs_code (def);
   if (code != PLUS_EXPR && code != MULT_EXPR && code != BIT_AND_EXPR
       && code != BIT_IOR_EXPR && code != BIT_XOR_EXPR
@@ -140,7 +143,8 @@ jam_reduction_phi_p (class loop *loop, gphi *phi)
       if (*opp && TREE_CODE (*opp) == SSA_NAME)
 	{
 	  gimple *d = SSA_NAME_DEF_STMT (*opp);
-	  if (is_gimple_assign (d) && CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (d))
+	  if (is_gimple_assign (d)
+	      && CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (d))
 	      && TREE_CODE (gimple_assign_rhs1 (d)) == SSA_NAME
 	      && INTEGRAL_TYPE_P (TREE_TYPE (gimple_assign_rhs1 (d)))
 	      && (TYPE_PRECISION (TREE_TYPE (*opp))
@@ -151,34 +155,92 @@ jam_reduction_phi_p (class loop *loop, gphi *phi)
   if (op1 != res && op2 != res)
     return false;
 
-  /* Only treat this as a jam-safe reduction if it is re-initialized each
-     outer-loop iteration (a per-output reduction, e.g. matrix C[i][j] from
-     sum = 0).  If its initial value is carried across the outer loop it is a
-     *shared* accumulator: after unroll-and-jam the per-copy accumulators would
-     need a post-loop reduction tree, which fuse_loops does not emit, so fusing
-     it would drop the other copies' contributions.  Refuse those here; the
-     general non-reduction safety check then prevents fusing such a loop.  */
+  /* Only treat this as a jam-safe reduction if its initializer is invariant
+     in the outer loop (the important case is a per-output reduction starting
+     from zero).  An initializer that varies with the outer loop may be a
+     shared accumulator carried through an intervening expression.  Fusing
+     such a reduction would need a post-loop reduction tree, which fuse_loops
+     does not emit.  This deliberately rejects some safe outer-IV-dependent
+     initializers in exchange for a simple complete proof.  */
   if (class loop *outer = loop_outer (loop))
     if (edge ple = loop_preheader_edge (loop))
       {
 	tree init = PHI_ARG_DEF_FROM_EDGE (phi, ple);
-	if (init && TREE_CODE (init) == SSA_NAME)
-	  {
-	    gimple *idef = SSA_NAME_DEF_STMT (init);
-	    if (gimple_code (idef) == GIMPLE_PHI
-		&& gimple_bb (idef) == outer->header)
-	      return false;
-	  }
+	if (!init || !expr_invariant_in_loop_p (outer, init))
+	  return false;
       }
   return true;
 }
+
 static bool
 loop_has_jam_reduction (class loop *loop)
 {
-  for (gphi_iterator psi = gsi_start_phis (loop->header); !gsi_end_p (psi); gsi_next (&psi))
-    if (!virtual_operand_p (gimple_phi_result (psi.phi ())) && jam_reduction_phi_p (loop, psi.phi ()))
+  for (gphi_iterator psi = gsi_start_phis (loop->header);
+       !gsi_end_p (psi); gsi_next (&psi))
+    if (!virtual_operand_p (gimple_phi_result (psi.phi ()))
+	&& jam_reduction_phi_p (loop, psi.phi ()))
       return true;
   return false;
+}
+
+/* True if PHI is an exit PHI carrying a recognized reduction value out of
+   LOOP.  */
+
+static bool
+jam_reduction_exit_phi_p (class loop *loop, gphi *phi)
+{
+  edge exit = single_exit (loop);
+  edge latch = loop_latch_edge (loop);
+  if (!exit || !latch || gimple_bb (phi) != exit->dest)
+    return false;
+
+  for (unsigned int i = 0; i < gimple_phi_num_args (phi); ++i)
+    {
+      edge arg_edge = gimple_phi_arg_edge (phi, i);
+      if (!flow_bb_inside_loop_p (loop, arg_edge->src))
+	continue;
+
+      tree value = gimple_phi_arg_def (phi, i);
+      for (gphi_iterator psi = gsi_start_phis (loop->header);
+	   !gsi_end_p (psi); gsi_next (&psi))
+	{
+	  gphi *header_phi = psi.phi ();
+	  if (jam_reduction_phi_p (loop, header_phi)
+	      && (value == gimple_phi_result (header_phi)
+		  || value == PHI_ARG_DEF_FROM_EDGE (header_phi, latch)))
+	    return true;
+	}
+    }
+  return false;
+}
+
+/* True if STMT directly stores VALUE.  Keeping the test deliberately narrow
+   prevents the existence of one reduction from licensing unrelated stores in
+   the outer-loop body.  */
+
+static bool
+jam_reduction_result_store_p (gimple *stmt, tree value)
+{
+  return (gimple_store_p (stmt)
+	  && is_gimple_assign (stmt)
+	  && gimple_assign_rhs_code (stmt) == SSA_NAME
+	  && gimple_assign_rhs1 (stmt) == value);
+}
+
+/* True if STMT directly stores a recognized reduction exit value.  */
+
+static bool
+jam_reduction_store_p (class loop *loop, gimple *stmt)
+{
+  if (!gimple_store_p (stmt)
+      || !is_gimple_assign (stmt)
+      || gimple_assign_rhs_code (stmt) != SSA_NAME)
+    return false;
+
+  tree value = gimple_assign_rhs1 (stmt);
+  gimple *def = SSA_NAME_DEF_STMT (value);
+  return (gimple_code (def) == GIMPLE_PHI
+	  && jam_reduction_exit_phi_p (loop, as_a <gphi *> (def)));
 }
 
 /* Modify the loop tree for the fact that all code once belonging
@@ -238,7 +300,7 @@ merge_loop_tree (class loop *loop, class loop *old)
    Check if any statements therein would prevent the transformation.  */
 
 static bool
-bb_prevents_fusion_p (basic_block bb, bool allow_store)
+bb_prevents_fusion_p (basic_block bb, class loop *loop, bool allow_store)
 {
   gimple_stmt_iterator gsi;
   /* BB is duplicated by outer unrolling and then all N-1 first copies
@@ -246,7 +308,8 @@ bb_prevents_fusion_p (basic_block bb, bool allow_store)
      the last copy still does so, and the first N-1 copies are cancelled
      by loop unrolling, so also after fusion it's the exit block.
      But there might be other reasons that prevent fusion:
-       * stores or unknown side-effects prevent fusion
+       * stores or unknown side-effects prevent fusion, except for the direct
+	 store of a recognized per-outer-iteration reduction result
        * loads don't
        * computations into SSA names: these aren't problematic.  Their
 	 result will be unused on the exit edges of the first N-1 copies
@@ -259,7 +322,8 @@ bb_prevents_fusion_p (basic_block bb, bool allow_store)
       gimple *g = gsi_stmt (gsi);
       if (gimple_has_side_effects (g))
 	return true;
-      if (gimple_vdef (g) && !(allow_store && gimple_store_p (g)))
+      if (gimple_vdef (g)
+	  && !(allow_store && jam_reduction_store_p (loop, g)))
 	return true;
     }
   return false;
@@ -275,7 +339,8 @@ unroll_jam_possible_p (class loop *outer, class loop *loop)
   basic_block *bbs;
   int i, n;
   class tree_niter_desc niter;
-  bool is_red = loop_has_jam_reduction (loop);
+  bool is_red = (param_unroll_jam_allow_reductions
+		 && loop_has_jam_reduction (loop));
 
   /* When fusing the loops we skip the latch block
      of the first one, so it mustn't have any effects to
@@ -329,6 +394,8 @@ unroll_jam_possible_p (class loop *outer, class loop *loop)
       imm_use_iterator imm_iter;
       use_operand_p use_p;
       tree op = gimple_phi_result (psi.phi ());
+      bool reduction_exit = (is_red
+			     && jam_reduction_exit_phi_p (loop, psi.phi ()));
       if (virtual_operand_p (op))
 	continue;
       FOR_EACH_IMM_USE_FAST (use_p, imm_iter, op)
@@ -336,7 +403,8 @@ unroll_jam_possible_p (class loop *outer, class loop *loop)
 	  gimple *use_stmt = USE_STMT (use_p);
 	  if (!is_gimple_debug (use_stmt)
 	      && flow_bb_inside_loop_p (outer, gimple_bb (use_stmt))
-	      && !(is_red && gimple_store_p (use_stmt)))
+	      && !(reduction_exit
+		   && jam_reduction_result_store_p (use_stmt, op)))
 	    return false;
 	}
     }
@@ -347,7 +415,7 @@ unroll_jam_possible_p (class loop *outer, class loop *loop)
 
   for (i = 0; i < n; i++)
     if (bbs[i]->loop_father == outer
-	&& (bb_prevents_fusion_p (bbs[i], is_red)
+	&& (bb_prevents_fusion_p (bbs[i], loop, is_red)
 	    /* Outer loop exits must come after the inner loop, otherwise
 	       we'll put the outer loop exit into the fused inner loop.  */
 	    || (loop_exits_from_bb_p (outer, bbs[i])
@@ -758,8 +826,9 @@ tree_loop_unroll_and_jam (void)
 
 	      if (DR_IS_WRITE (dra) || DR_IS_WRITE (drb))
 		{
-		  if (!alias_sets_conflict_p (get_alias_set (DR_REF (dra)),
-					      get_alias_set (DR_REF (drb))))
+		  if (param_unroll_jam_use_alias_sets
+		      && !alias_sets_conflict_p (get_alias_set (DR_REF (dra)),
+						 get_alias_set (DR_REF (drb))))
 		    continue;
 		  unroll_factor = 0;
 		  break;
@@ -771,8 +840,10 @@ tree_loop_unroll_and_jam (void)
 	 to ignore all profitability concerns and apply the transformation
 	 always.  */
       if (!param_unroll_jam_min_percent)
-	profit_unroll = MAX (loop_has_jam_reduction (loop)
-			     ? (unsigned)param_unroll_jam_max_unroll : 2u, profit_unroll);
+	profit_unroll = MAX ((param_unroll_jam_allow_reductions
+			      && loop_has_jam_reduction (loop))
+			     ? (unsigned) param_unroll_jam_max_unroll : 2u,
+			     profit_unroll);
       else if (removed * 100 / datarefs.length ()
 	  < (unsigned)param_unroll_jam_min_percent)
 	profit_unroll = 1;
@@ -971,11 +1042,15 @@ pass_preunroll::execute (function *fun)
       class tree_niter_desc desc;
       if (!can_unroll_loop_p (loop, factor, &desc))
 	continue;
+      unsigned int loop_num = loop->num;
       initialize_original_copy_tables ();
       tree_unroll_loop (loop, factor, &desc);
       free_original_copy_tables ();
       /* Keep the later RTL unroller from unrolling this loop again.  */
       loop->unroll = 1;
+      if (dump_file)
+	fprintf (dump_file, "preunroll: unrolled loop %u by %u\n",
+		 loop_num, factor);
       changed = true;
     }
 
