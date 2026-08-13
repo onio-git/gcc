@@ -232,43 +232,47 @@ contrib/onio-zero/onio-dejagnu-gate.sh                    # check
 contrib/onio-zero/onio-dejagnu-gate.sh --update-baseline  # re-record
 ```
 
-### No baseline is recorded yet
+### The recorded baseline
 
-`onio-dejagnu-gate-baseline.txt` is deliberately absent.  A first run must
-record it:
+`onio-dejagnu-gate-baseline.txt` holds 1,062 entries — 1,014 `FAIL` and 48
+`UNRESOLVED` — recorded at commit `9e3ea11a539` with a clean working tree, as
+its `.provenance` file records.  The full run:
 
-```sh
-contrib/onio-zero/onio-dejagnu-gate.sh --update-baseline
-```
+| Suite | Passes | Failures | Unresolved | Unsupported |
+|---|---:|---:|---:|---:|
+| `gcc.target/riscv/riscv.exp` | 31,682 | 872 | 48 | 7,398 |
+| `gcc.c-torture/execute` | 24,294 | 142 | 0 | 110 |
 
-A baseline was attempted on 2026-08-13 and discarded rather than committed.
-Another session was editing `gcc/config/riscv/riscv.cc` in this worktree and
-relinking `cc1` while the run was in progress, twice (13:27 and 14:57).  The
-run therefore spanned three different compilers.  Its logs contain no spawn
-failures, so no individual test was corrupted, but a baseline that mixes
-compilers describes a state nobody can reproduce, which is the one thing a
-baseline may not do.
+The execution suite passes 24,294 of 24,436 attempted, a 99.4% rate, which is
+the useful number here: it exercises generated code and the simulator
+together.  The `riscv.exp` failures are dominated by tests for hardware this
+configuration does not have — `xtheadfmv-fmv.c` (48), `zbb-min-max-04.c` (36),
+`zba-shNadd-07.c` (36), the `zicond`/`czero` group, and `arch-unset-5.c` (18,
+rv64 ABI).  They stay visible in the baseline rather than being excluded by
+directory, so a real regression in the same files is still reported.
 
-Record the baseline when the working tree is settled, and note the commit it
-was taken at.  Partial evidence from the discarded run is still informative:
+An earlier attempt on 2026-08-13 was discarded: another session relinked `cc1`
+twice while it ran (13:27 and 14:57), so it spanned three compilers.  That is
+what the compiler-identity guard now prevents.  One claim made from that run
+should be corrected — `riscv.exp` was described as having "completed with 25
+failures out of 4,820 result lines"; it had not completed.  The suite runs to
+roughly 40,000 result lines and 872 failures, and the low early count was
+simply progress, not a result.
 
-- `gcc.target/riscv/riscv.exp` completed with 25 failures out of 4,820 result
-  lines, all in `arch-unset-5.c` (rv64 ABI) and `cmpmemsi-1.c` (needs
-  `stdio.h`).
-- `gcc.c-torture/execute` reached roughly 12% of its ~26,600 result lines with
-  **zero simulator timeouts and zero memory-range errors across 756 program
-  runs**, against a full run in which those were the two largest failure
-  causes.  That is the clearest available confirmation that the semihosting
-  fix and the `--mem-region` board option work at scale.
-- The execution failures seen in that window were all pre-existing in the full
-  run and fail at `-O0`, so none is attributable to the ONiO optimizations.
-  Two were identified: `920501-8.c` needs `%f` support, which newlib-nano
-  omits unless linked with `-u _printf_float` (the test declares exactly that
-  under a `newlib_nano_io` effective target the board does not claim), and
-  `memcpy-1.c`/`memcpy-2.c` allocate two 128 KiB stack buffers because the
-  board sets no `STACK_SIZE`, then exceed the time limit on simulation
-  throughput rather than on correctness.  Both belong in the baseline as known
-  failures.
+Two findings from the discarded run do hold, and the completed run confirms
+them:
+
+- **Zero simulator timeouts and zero memory-range errors**, against a full
+  DejaGNU run in which those were the two largest failure causes.  That is the
+  confirmation at scale that the semihosting fix and the `--mem-region` board
+  option work.
+- The execution failures are pre-existing and fail at `-O0`, so none is
+  attributable to the ONiO optimizations.  Two are explained: `920501-8.c`
+  needs `%f`, which newlib-nano omits unless linked with `-u _printf_float`
+  (the test declares exactly that under a `newlib_nano_io` effective target
+  this board does not claim), and `memcpy-1.c`/`memcpy-2.c` allocate two
+  128 KiB stack buffers because the board sets no `STACK_SIZE`, then exceed
+  the time limit on simulation throughput rather than on correctness.
 
 ## Relationship to the CoreMark follow-up screening
 
