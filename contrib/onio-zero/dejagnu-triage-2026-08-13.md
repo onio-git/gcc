@@ -270,6 +270,51 @@ was taken at.  Partial evidence from the discarded run is still informative:
   throughput rather than on correctness.  Both belong in the baseline as known
   failures.
 
+## Relationship to the CoreMark follow-up screening
+
+`results/2026-08-13-coremark-screening.md` records a parallel tuning effort
+that ran against this same worktree while this triage was in progress.  The
+two interact in three ways that matter for reading either document.
+
+**The CoreMark reference point moved.**  Everything else in this report refers
+to the preserved ws01 baseline, 197,051 modeled cycles at SHA-256
+`77baa9a3…`, because that is what the changes described here were validated
+against, and none of them alter code generation.  The screening then changed
+three target defaults — dropping `loop-kernel-inline-growth-limit`, setting
+`iv-always-prune-cand-set-bound=5`, and enabling `-fgcse-las` under a new
+`gcse-las-generated-only` restriction — and moved the reference point:
+
+| Metric | This report's baseline | After the screening |
+|---|---:|---:|
+| ELF SHA-256 | `77baa9a3…` | `b39a281d…` |
+| text bytes | 14,768 | 14,704 |
+| modeled cycles | 197,051 | 196,736 |
+| CoreMark/MHz | 5.075 | 5.083 |
+
+Those figures were reproduced independently for this record: building CoreMark
+with the compiler currently in the build tree yields exactly
+`b39a281daa94a30b2f2bcca2d00b2239bce65f7a78cd35ec3c68d856c6d86860`, 14,704
+bytes of text and 196,736 cycles, matching the screening document.  The gain is
+below the model's documented calibration error and is a board candidate, not a
+hardware result.
+
+**The focused ONiO suite grew.**  This report cites 78 passes and one
+unsupported variant across four `gcc.target/riscv/onio-zero-*.c` tests.  The
+screening adds three more — `onio-zero-gcse-las-generated.c`,
+`onio-zero-inline-dispatcher.c` and `onio-zero-iv-prune.c` — for seven tests
+reporting 158 passes, one unsupported variant and no failures.  A focused run
+quoted from either document should say which set it used.
+
+**Any baseline recorded now carries those changes.**  While this was written
+the working tree held uncommitted edits to `gcc/config/riscv/riscv.cc`,
+`gcc/gcse.cc` and `gcc/params.opt` from that screening, and the compiler in
+the build tree was built from them.  A baseline recorded against that tree
+describes `6b53b97` *plus* work-in-progress, not `6b53b97` alone.
+`onio-dejagnu-gate.sh` therefore writes a `.provenance` file recording the
+commit and a hash of the working-tree diff next to the baseline, and refuses
+to write a baseline at all if the compiler is rebuilt mid-run.  Prefer to
+record the baseline once the screening changes are committed.
+
 ## Commands and results
 
 | Check | Result |

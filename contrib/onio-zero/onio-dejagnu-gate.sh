@@ -51,6 +51,19 @@ export DEJAGNU_SIM="${DEJAGNU_SIM:-$ONIO_RV32SIM/.venv/bin/mikrosim}"
 
 mkdir -p "$OUTDIR"
 
+# A baseline is only meaningful if one compiler produced every result in it.
+# Anything that rebuilds cc1 mid-run - a concurrent session, an editor-driven
+# make - silently mixes compilers, so identify the compiler up front and
+# verify it afterwards.
+compiler_id () {
+  sha256sum "$ONIO_BUILD/gcc/cc1" "$ONIO_BUILD/gcc/xgcc" 2>/dev/null | awk '{print $1}'
+}
+COMPILER_BEFORE=$(compiler_id)
+if [ -z "$COMPILER_BEFORE" ]; then
+  echo "cannot identify the compiler under $ONIO_BUILD/gcc" >&2
+  exit 2
+fi
+
 # This DejaGNU has no -j, so run each suite in its own directory concurrently
 # and merge the summaries afterwards.  JOBS caps how many run at once.
 running=0
@@ -89,9 +102,22 @@ fi
 cat "$OUTDIR"/shard*/gcc.sum > "$OUTDIR/gcc.sum"
 grep -E '^(FAIL|UNRESOLVED|ERROR|XPASS):' "$OUTDIR/gcc.sum" | sort > "$OUTDIR/gate-results.txt" || true
 
+if [ "$COMPILER_BEFORE" != "$(compiler_id)" ]; then
+  echo >&2
+  echo "the compiler was rebuilt while this run was in progress, so its" >&2
+  echo "results span more than one compiler and cannot be trusted." >&2
+  echo "results kept for inspection: $OUTDIR/gate-results.txt" >&2
+  exit 3
+fi
+
 if [ "$UPDATE" -eq 1 ]; then
   cp "$OUTDIR/gate-results.txt" "$BASELINE"
+  {
+    echo "# Recorded from $(cd "$ONIO_GCC_SRC" && git rev-parse --short HEAD)"
+    echo "# Working-tree diff sha256: $(cd "$ONIO_GCC_SRC" && git diff | sha256sum | cut -d' ' -f1)"
+  } > "$BASELINE.provenance"
   echo "baseline updated: $BASELINE ($(wc -l < "$BASELINE") known failures)"
+  cat "$BASELINE.provenance"
   exit 0
 fi
 
