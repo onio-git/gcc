@@ -13,6 +13,13 @@ the CPU design.
 - `results/2026-08-13-coremark-screening.md` records the follow-up compiler
   search, the rejected candidates, and the new hash-controlled CoreMark
   candidate awaiting board validation.
+- `results/2026-08-14-selective-lto.md` records the selective list/CRC LTO
+  improvement, the rejected RVC-renaming work, and an optional fixed-layout
+  cache-phase candidate.
+- `results/2026-08-26-function-layout.md` records the follow-up function
+  section, matrix-order, and full cache-alias screen built on selective LTO.
+- `results/2026-08-30-board-ab.md` is the external-board handoff for the
+  three hash-controlled CoreMark images.
 
 ## Acceptance order
 
