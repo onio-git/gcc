@@ -130,3 +130,26 @@ As a negative control, the previously installed compiler had the same
 with SHA-256 `77baa9a36f4ce11a7225bbbd3f447b2a0ad5f3a309c2493b7c330fcbda953b28`.
 This confirms why version text and an ELF hash alone were not an adequate
 handoff; the tagged GCC source and executable build procedure are required.
+
+## Full public-source end-to-end verification
+
+After publishing the input tag, the complete procedure above was run in a new
+temporary directory on `x86_64` Ubuntu 22.04 with the system GCC 11.4.0 host
+compiler.  The verification:
+
+- downloaded the Binutils 2.43 tarball and passed its recorded SHA-256 check;
+- configured, built, and installed Binutils into a new empty prefix;
+- shallow-cloned the public GCC tag at
+  `a18c92d150277e9233b3e4c1fac2e719b0a1243d`;
+- downloaded the checksum-pinned GCC prerequisites;
+- configured GCC with the commands above and built `all-gcc` plus
+  `all-target-libgcc` with four jobs;
+- shallow-cloned the public rv32sim snapshot at
+  `324adf10be1886ab74e8abd04b36e17e8e11369e`; and
+- ran the tagged rebuild script with only the newly built RISC-V tools.
+
+The clean compiler and target-library executables had different host-file
+hashes from the earlier incremental build, as expected for separately built
+host tools, but generated all three target ELFs byte for byte with the expected
+SHA-256 values and section sizes.  This is the independent reconstruction
+evidence; the ELF hashes are its verification outputs.
