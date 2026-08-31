@@ -20,6 +20,10 @@ the CPU design.
   section, matrix-order, and full cache-alias screen built on selective LTO.
 - `results/2026-08-30-board-ab.md` is the external-board handoff for the
   three hash-controlled CoreMark images.
+- `results/2026-08-31-reproduction.md` and
+  `rebuild-coremark-candidates.sh` provide the pinned source/toolchain
+  procedure that recreates all three images; the source manifest is
+  `coremark-source-324adf10.sha256`.
 
 ## Acceptance order
 
