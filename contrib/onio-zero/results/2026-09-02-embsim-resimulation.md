@@ -1,5 +1,11 @@
 # ONiO.zero embsim resimulation — 2026-09-02
 
+> **Superseded performance model:** the Aldebaran implementation used here
+> incorrectly kept one preferred way per cache set. See
+> `2026-09-02-cache-model-audit.md` and embsim
+> `6277348b9a24bf1284b6108ac57f4b8bd08a223d`. The archived measurements below
+> remain useful as historical evidence but are not board-calibrated rankings.
+
 ## Outcome
 
 Every surviving CoreMark ELF artifact was reprocessed with `embsim`, and the

@@ -44,6 +44,15 @@ class Measurement:
     branches_not_taken: int = 0
     loads: int = 0
     stores: int = 0
+    code_accesses: int = 0
+    code_hits: int = 0
+    code_soft_misses: int = 0
+    code_hard_misses: int = 0
+    code_invalid_fills: int = 0
+    code_replacements: int = 0
+    code_sequential_hard_misses: int = 0
+    code_nonsequential_hard_misses: int = 0
+    data_accesses: int = 0
     coremark_per_mhz: float = 0.0
     modeled_coremark_per_mj: float = 0.0
     error: str = ""
@@ -117,6 +126,11 @@ def integer(output: str, pattern: str) -> int:
     if match is None:
         raise RuntimeError(f"missing simulator output matching {pattern!r}")
     return int(match.group(1))
+
+
+def optional_integer(output: str, pattern: str) -> int:
+    match = re.search(pattern, output, re.MULTILINE)
+    return int(match.group(1)) if match is not None else 0
 
 
 def monitor_reply(process: subprocess.Popen[bytes], command: str | None = None) -> str:
@@ -240,6 +254,27 @@ def run_unique(
             branches_not_taken=int(branch_row.group(3)),
             loads=integer(output, r"Loads: (\d+)"),
             stores=integer(output, r"Stores: (\d+)"),
+            code_accesses=optional_integer(output, r"Code memory accesses: (\d+)"),
+            code_hits=optional_integer(output, r"Code memory hits: (\d+)"),
+            code_soft_misses=optional_integer(
+                output, r"Code memory soft_misses: (\d+)"
+            ),
+            code_hard_misses=optional_integer(
+                output, r"Code memory hard_misses: (\d+)"
+            ),
+            code_invalid_fills=optional_integer(
+                output, r"Code memory invalid_fills: (\d+)"
+            ),
+            code_replacements=optional_integer(
+                output, r"Code memory replacements: (\d+)"
+            ),
+            code_sequential_hard_misses=optional_integer(
+                output, r"Code memory sequential_hard_misses: (\d+)"
+            ),
+            code_nonsequential_hard_misses=optional_integer(
+                output, r"Code memory nonsequential_hard_misses: (\d+)"
+            ),
+            data_accesses=optional_integer(output, r"Data memory accesses: (\d+)"),
             coremark_per_mhz=iterations * 1_000_000 / cycles,
             modeled_coremark_per_mj=cm_at_freq / power_mw,
         )
@@ -347,12 +382,14 @@ def main() -> int:
     if args.csv:
         write_csv(args.csv, rows)
     print(
-        "path,sha256,status,instructions,cycles,fetch,branch,mispredictions,CoreMark/MHz"
+        "path,sha256,status,instructions,cycles,fetch,branch,mispredictions,"
+        "soft_misses,hard_misses,CoreMark/MHz"
     )
     for row in rows:
         print(
             f"{row.path},{row.sha256},{row.status},{row.instructions},{row.cycles},"
             f"{row.fetch_penalty},{row.branch_penalty},{row.mispredictions},"
+            f"{row.code_soft_misses},{row.code_hard_misses},"
             f"{row.coremark_per_mhz:.6f}"
         )
     errors = sum(row.status != "OK" for row in rows)

@@ -1,5 +1,10 @@
 # ONiO.zero loop memory-extension experiment, 2026-09-02
 
+> **Hardware status:** this report's embsim ranking is superseded by
+> `2026-09-02-cache-model-audit.md`. Reported board measurements show that the
+> `9e3ea11a…` base is substantially slower than `6b53b974…`; no candidate in
+> this report is a validated successor to `6b53b974…`.
+
 ## Result
 
 A general RTL liveness bug prevented `ext-dce` from narrowing some

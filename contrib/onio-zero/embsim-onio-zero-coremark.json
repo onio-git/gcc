@@ -1,14 +1,22 @@
 {
   "model": {
-    "name": "ONiO.zero CoreMark performance model for embsim",
+    "name": "ONiO.zero CoreMark structural screening model for embsim",
     "target": "ONiO.zero",
-    "kind": "calibrated-performance-model",
+    "kind": "uncalibrated-structural-model",
     "calibration": {
-      "equation": "modeled_cycles = minstret + 9.63 * icache_miss",
-      "measured_builds": 8,
-      "max_absolute_error_percent": 0.9,
+      "status": "invalidated",
+      "reason": "Reported 32 MHz board results for GCC 6b53b974 and 9e3ea11a differ by about 11 percent while the corrected cache model predicts about 0.2 percent for locally reconstructed ELFs; the exact flashed ELFs are not yet archived.",
+      "equation": null,
+      "measured_builds": 0,
+      "max_absolute_error_percent": null,
       "raw_dataset": null,
-      "provenance": "Port of rv32sim.py tests/coremark/onio_model.json SHA-256 5fffda831f7fe9dd3054cdbe816c088c21c9c16ea48b12e97bc5e7de9975dfdf"
+      "historical_provenance": "The superseded model was ported from rv32sim.py tests/coremark/onio_model.json SHA-256 5fffda831f7fe9dd3054cdbe816c088c21c9c16ea48b12e97bc5e7de9975dfdf; its claimed eight-build dataset was never versioned.",
+      "required_inputs": "Exact flashed ELF files and hashes, raw per-run timings, board/silicon revision, clock, voltage, and flash configuration for both revisions."
+    },
+    "parameter_status": {
+      "soft_cycles": "The supplied cache description specifies one extra cycle for an other-way hit.",
+      "hard_cycles": "The value 10 is an uncalibrated placeholder; the supplied cache description does not specify flash line-fill latency.",
+      "use": "Instruction-level screening only until a versioned board dataset validates ranking on held-out binaries."
     }
   },
   "memif": {
