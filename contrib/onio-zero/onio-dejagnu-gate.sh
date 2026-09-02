@@ -67,6 +67,7 @@ if [ -z "$COMPILER_BEFORE" ]; then
   echo "cannot identify the compiler under $ONIO_BUILD/gcc" >&2
   exit 2
 fi
+GCC_UNDER_TEST="$ONIO_BUILD/gcc/xgcc -B$ONIO_BUILD/gcc/"
 
 # GCC's testsuite supplies a cooperative parallelizer for DejaGNU. Each worker
 # enumerates the complete suite; marker files assign each batch to exactly one
@@ -87,7 +88,10 @@ run_suite () {
     dir="$OUTDIR/$RUN_ID-$label-worker$worker"
     RESULT_DIRS="$RESULT_DIRS $dir"
     mkdir -p "$dir"
-    sed "s|set tmpdir .*|set tmpdir $dir|" "$ONIO_BUILD/gcc/site.exp" > "$dir/site.exp"
+    {
+      sed "s|set tmpdir .*|set tmpdir $dir|" "$ONIO_BUILD/gcc/site.exp"
+      echo "set GCC_UNDER_TEST {$GCC_UNDER_TEST}"
+    } > "$dir/site.exp"
     echo "running $exp worker $worker/$JOBS in $dir"
     (
       export GCC_RUNTEST_PARALLELIZE_DIR="$markers"

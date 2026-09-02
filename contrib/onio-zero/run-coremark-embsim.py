@@ -23,6 +23,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_MODEL = SCRIPT_DIR / "embsim-onio-zero-coremark.json"
 DEFAULT_FREQ_HZ = 32_000_000
 DEFAULT_POWER_UW_PER_MHZ = 22.0
+MONITOR_PROMPT = b"(embsim) "
+MAX_MONITOR_CHUNK = 1_000_000
 
 
 @dataclass(frozen=True)
@@ -117,51 +119,90 @@ def integer(output: str, pattern: str) -> int:
     return int(match.group(1))
 
 
+def monitor_reply(process: subprocess.Popen[bytes], command: str | None = None) -> str:
+    if command is not None:
+        if process.stdin is None:
+            raise RuntimeError("embsim debugger stdin is unavailable")
+        process.stdin.write(command.encode() + b"\n")
+        process.stdin.flush()
+    if process.stdout is None:
+        raise RuntimeError("embsim debugger stdout is unavailable")
+    reply = bytearray()
+    while not reply.endswith(MONITOR_PROMPT):
+        byte = process.stdout.read(1)
+        if not byte:
+            raise RuntimeError(
+                f"embsim debugger closed while waiting for {command or 'initial prompt'}"
+            )
+        reply.extend(byte)
+    return reply[: -len(MONITOR_PROMPT)].decode(errors="replace")
+
+
+def run_until_any_pc(
+    process: subprocess.Popen[bytes], targets: set[int], cap: int
+) -> tuple[int, str]:
+    target_list = ",".join(f"0x{pc:x}" for pc in sorted(targets))
+    executed = 0
+    replies: list[str] = []
+    while executed < cap:
+        chunk = min(MAX_MONITOR_CHUNK, cap - executed)
+        reply = monitor_reply(
+            process, f"monitor run_until_any_pc {target_list} {chunk}"
+        )
+        replies.append(reply)
+        reached = re.search(r"Reached PC=0x([0-9a-f]+) after (\d+) steps", reply)
+        if reached is not None:
+            return int(reached.group(1), 16), "".join(replies)
+        incomplete = re.search(
+            r"(?:not reached|No requested PC reached) in (\d+) steps", reply
+        )
+        if incomplete is None:
+            raise RuntimeError(f"embsim stopped before a target PC: {reply.strip()}")
+        executed += int(incomplete.group(1))
+    raise RuntimeError(f"timed window was not reached within the {cap}-instruction cap")
+
+
 def run_unique(
     path: Path,
     sha256: str,
     embsim: str,
     objdump: str,
     model: Path,
+    iterations: int,
     freq_hz: int,
     power_uw_per_mhz: float,
     cap: int,
 ) -> Measurement:
+    process: subprocess.Popen[bytes] | None = None
     try:
         starts, stops = timed_pcs(path, objdump)
-        start_list = ",".join(f"0x{pc:x}" for pc in sorted(starts))
-        stop_list = ",".join(f"0x{pc:x}" for pc in sorted(stops))
-        commands = [
-            f"monitor run_until_any_pc {start_list} {cap}",
-            "monitor reset_counter",
-            f"monitor run_until_any_pc {stop_list} {cap}",
-            "monitor show_stats",
-            "quit",
-        ]
-        process = subprocess.run(
+        process = subprocess.Popen(
             [
                 embsim,
                 "--quiet",
                 "--debug",
                 "--no-gdb-server",
+                "--fast",
                 f"--stub={model}",
                 str(path),
             ],
-            input="\n".join(commands) + "\n",
-            text=True,
-            capture_output=True,
-            check=False,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
         )
-        output = process.stdout + process.stderr
-        hits = [
-            int(value, 16) for value in re.findall(r"Reached PC=0x([0-9a-f]+)", output)
-        ]
+        monitor_reply(process)
+        start_pc, start_output = run_until_any_pc(process, starts, cap)
+        reset_output = monitor_reply(process, "monitor reset_counter")
+        stop_pc, stop_output = run_until_any_pc(process, stops, cap)
+        stats_output = monitor_reply(process, "monitor show_stats")
+        output = start_output + reset_output + stop_output + stats_output
+        if process.stdin is None:
+            raise RuntimeError("embsim debugger stdin is unavailable")
+        process.stdin.write(b"quit\n")
+        process.stdin.flush()
+        process.wait(timeout=5)
         if process.returncode != 0:
             raise RuntimeError(f"embsim exited {process.returncode}: {output.strip()}")
-        if len(hits) < 2 or hits[0] not in starts or hits[1] not in stops:
-            raise RuntimeError(
-                f"timed window was not reached within the {cap}-instruction cap"
-            )
 
         instructions = integer(output, r"Instructions: (\d+)")
         cycles = integer(output, r"Cycles: (\d+)")
@@ -181,14 +222,14 @@ def run_unique(
         )
         if branch_row is None:
             raise RuntimeError("missing branch counters")
-        cm_at_freq = freq_hz / cycles
+        cm_at_freq = iterations * freq_hz / cycles
         power_mw = freq_hz / 1_000_000 * power_uw_per_mhz / 1000
         return Measurement(
             path=str(path),
             sha256=sha256,
             status="OK",
-            start_pc=f"0x{hits[0]:08x}",
-            stop_pc=f"0x{hits[1]:08x}",
+            start_pc=f"0x{start_pc:08x}",
+            stop_pc=f"0x{stop_pc:08x}",
             instructions=instructions,
             cycles=cycles,
             fetch_penalty=fetch,
@@ -199,13 +240,21 @@ def run_unique(
             branches_not_taken=int(branch_row.group(3)),
             loads=integer(output, r"Loads: (\d+)"),
             stores=integer(output, r"Stores: (\d+)"),
-            coremark_per_mhz=1_000_000 / cycles,
+            coremark_per_mhz=iterations * 1_000_000 / cycles,
             modeled_coremark_per_mj=cm_at_freq / power_mw,
         )
     except (OSError, RuntimeError, subprocess.SubprocessError) as error:
         return Measurement(
             path=str(path), sha256=sha256, status="ERROR", error=str(error)
         )
+    finally:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
 
 
 def write_csv(path: Path, rows: list[Measurement]) -> None:
@@ -247,6 +296,12 @@ def main() -> int:
     )
     parser.add_argument("--freq-hz", type=int, default=DEFAULT_FREQ_HZ)
     parser.add_argument(
+        "--iterations",
+        type=int,
+        default=1,
+        help="CoreMark iterations inside the measured window (default: 1)",
+    )
+    parser.add_argument(
         "--power-uw-per-mhz", type=float, default=DEFAULT_POWER_UW_PER_MHZ
     )
     parser.add_argument(
@@ -256,6 +311,9 @@ def main() -> int:
         help="instruction limit for reaching each edge of the timed window",
     )
     args = parser.parse_args()
+
+    if args.iterations < 1:
+        parser.error("--iterations must be a positive integer")
 
     embsim = executable(args.embsim, "embsim")
     objdump = executable(args.objdump, "RISC-V objdump")
@@ -276,6 +334,7 @@ def main() -> int:
                 embsim,
                 objdump,
                 args.model.resolve(),
+                args.iterations,
                 args.freq_hz,
                 args.power_uw_per_mhz,
                 args.cap,

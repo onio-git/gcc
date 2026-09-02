@@ -29,6 +29,9 @@ the CPU design.
   results are in `results/2026-09-02-embsim-coremark-all.csv`; the runner and
   translated model are `run-coremark-embsim.py` and
   `embsim-onio-zero-coremark.json`.
+- `results/2026-09-02-ext-dce-loop-memory.md` records the next compiler
+  experiment: a loop liveness fix that removes redundant extensions, its
+  one- and 2,000-iteration `embsim` results, and the invalidated 16-byte pad.
 
 All new ONiO simulation must use `embsim`. The `rv32sim.py` repository remains
 the pinned public location of the CoreMark source snapshot and archived ELF

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rebuild the three hash-controlled ONiO.zero CoreMark board candidates.
+# Rebuild the hash-controlled ONiO.zero CoreMark comparison images.
 
 set -euo pipefail
 
@@ -19,6 +19,7 @@ Environment:
   ONIO_LD          linker checked for GNU ld 2.43 and ordering-file support
                    (default: riscv32-unknown-elf-ld)
   ONIO_SIZE        size tool (default: riscv32-unknown-elf-size)
+  ONIO_ITERATIONS  compile-time CoreMark iteration count (default: 1)
 EOF
   exit 2
 }
@@ -28,6 +29,12 @@ EOF
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source_dir=$(cd -- "$1" && pwd)
 output_dir=$2
+iterations=${ONIO_ITERATIONS:-1}
+if [[ ! $iterations =~ ^[1-9][0-9]*$ ]]; then
+  printf 'error: ONIO_ITERATIONS must be a positive integer: %s\n' \
+    "$iterations" >&2
+  exit 2
+fi
 
 if [[ -e $output_dir ]]; then
   printf 'error: output directory already exists: %s\n' "$output_dir" >&2
@@ -40,6 +47,20 @@ cc_path=${ONIO_CC:-riscv32-unknown-elf-gcc}
 as_path=${ONIO_AS:-riscv32-unknown-elf-as}
 ld_path=${ONIO_LD:-riscv32-unknown-elf-ld}
 size_path=${ONIO_SIZE:-riscv32-unknown-elf-size}
+
+if [[ $iterations == 1 ]]; then
+  target_hash=9b49f59e6f1a47dd682765ec399885b0bc89e9ef0037af3960a7c96eff9ab3e7
+  unpadded_hash=edf20b1c59b488f00e2e00b9f4874ce6836539335a975e628f3fdd999827c4ce
+  padded_hash=9846d1bcd14bc39ac1904eec2d1e6f3b3592cec2576985670989d953795393b8
+  target_elf=coremark-target-default-${target_hash:0:8}.elf
+  unpadded_elf=coremark-layout-unpadded-${unpadded_hash:0:8}.elf
+  padded_elf=coremark-layout-pad16-${padded_hash:0:8}.elf
+else
+  target_elf=coremark-target-default-iterations-$iterations.elf
+  unpadded_elf=coremark-layout-unpadded-iterations-$iterations.elf
+  padded_elf=coremark-layout-pad16-iterations-$iterations.elf
+fi
+
 cc=("$cc_path")
 if [[ -n ${ONIO_GCC_BUILD:-} ]]; then
   gcc_build=$(cd -- "$ONIO_GCC_BUILD" && pwd)
@@ -110,7 +131,7 @@ run_in() {
 }
 
 common=(
-  -I. -DITERATIONS=1 -DTOTAL_DATA_SIZE=2000 -DCPU_FREQ_HZ=32000000
+  -I. "-DITERATIONS=$iterations" -DTOTAL_DATA_SIZE=2000 -DCPU_FREQ_HZ=32000000
   -march=rv32imc_zicsr_zba_zbb_zbs_zifencei -mabi=ilp32
   -ffreestanding -fno-builtin -Wall -Wextra -Wno-unused-parameter
   -O2 -mcpu=onio-zero -std=c99
@@ -151,7 +172,7 @@ compile_target_default() {
     -ffreestanding -fno-builtin -Wall -Wextra -Wno-unused-parameter \
     -O2 -mcpu=onio-zero -nostdlib -Wl,--gc-sections \
     -Wl,-Map=coremark.map -T "$source_dir/linker.ld" -lgcc \
-    -o coremark-target-default-b39a281d.elf
+    -o "$target_elf"
 }
 
 compile_layout_candidates() {
@@ -185,10 +206,10 @@ compile_layout_candidates() {
     -T "$source_dir/linker.ld" -lgcc
   )
   run_in "$build" "${cc[@]}" "${objects[@]}" "${link_flags[@]}" \
-    -Wl,-Map=coremark-unpadded.map -o coremark-layout-unpadded-32e53011.elf
+    -Wl,-Map=coremark-unpadded.map -o "$unpadded_elf"
   run_in "$build" "${cc[@]}" "${objects[@]}" coremark-cache-pad-16.o \
     "${link_flags[@]}" -Wl,-Map=coremark-pad16.map \
-    -o coremark-layout-pad16-11e9ac96.elf
+    -o "$padded_elf"
 }
 
 record_tools() {
@@ -242,16 +263,23 @@ compile_target_default
 compile_layout_candidates
 
 "$size_path" \
-  "$output_dir/target-default/coremark-target-default-b39a281d.elf" \
-  "$output_dir/layout/coremark-layout-unpadded-32e53011.elf" \
-  "$output_dir/layout/coremark-layout-pad16-11e9ac96.elf"
+  "$output_dir/target-default/$target_elf" \
+  "$output_dir/layout/$unpadded_elf" \
+  "$output_dir/layout/$padded_elf"
 
-check_hash \
-  "$output_dir/target-default/coremark-target-default-b39a281d.elf" \
-  b39a281daa94a30b2f2bcca2d00b2239bce65f7a78cd35ec3c68d856c6d86860
-check_hash \
-  "$output_dir/layout/coremark-layout-unpadded-32e53011.elf" \
-  32e5301104b85dfcab4a723799c654ea6cfd375be66d013b031ceb620e386ef8
-check_hash \
-  "$output_dir/layout/coremark-layout-pad16-11e9ac96.elf" \
-  11e9ac9629d47bae7ee27654901cbc7551f710641a7e77f5a892dd4ef7e86f48
+if [[ $iterations == 1 ]]; then
+  check_hash \
+    "$output_dir/target-default/$target_elf" \
+    "$target_hash"
+  check_hash \
+    "$output_dir/layout/$unpadded_elf" \
+    "$unpadded_hash"
+  check_hash \
+    "$output_dir/layout/$padded_elf" \
+    "$padded_hash"
+else
+  sha256sum \
+    "$output_dir/target-default/$target_elf" \
+    "$output_dir/layout/$unpadded_elf" \
+    "$output_dir/layout/$padded_elf"
+fi
