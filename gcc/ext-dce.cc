@@ -1347,6 +1347,20 @@ ext_dce_process_uses (rtx_insn *insn, rtx obj,
 		      if (tmp_mask & -HOST_WIDE_INT_UC (0x100000000))
 			bitmap_set_bit (livenow, rn + 3);
 		    }
+		  else if (MEM_P (y))
+		    {
+		      /* The SET iterator would otherwise descend into both
+			 operands, incorrectly treating SET_DEST as a use.  Mark
+			 registers in the memory address live here so that the whole
+			 SET can be skipped below.  */
+		      subrtx_iterator::array_type array;
+		      FOR_EACH_SUBRTX (mem_iter, array, XEXP (y, 0), NONCONST)
+			if (REG_P (*mem_iter))
+			  {
+			    make_reg_live (livenow, REGNO (*mem_iter));
+			    mem_iter.skip_subrtxes ();
+			  }
+		    }
 		  else if (!CONSTANT_P (y))
 		    break;
 
@@ -1372,7 +1386,7 @@ ext_dce_process_uses (rtx_insn *insn, rtx obj,
 		}
 
 	      /* These are leaf nodes, no need to iterate down into them.  */
-	      if (REG_P (y) || CONSTANT_P (y))
+	      if (REG_P (y) || MEM_P (y) || CONSTANT_P (y))
 		iter.skip_subrtxes ();
 	    }
 	}
