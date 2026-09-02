@@ -18,7 +18,7 @@ set -eu
 
 : "${ONIO_GCC_SRC:?source onio-zero-dev.env first}"
 : "${ONIO_BUILD:?source onio-zero-dev.env first}"
-: "${ONIO_RV32SIM:?source onio-zero-dev.env first}"
+: "${ONIO_EMBSIM:?source onio-zero-dev.env first}"
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 BASELINE="$HERE/onio-dejagnu-gate-baseline.txt"
@@ -39,15 +39,19 @@ done
 # Suites relevant to RV32IMC/ONiO.zero.  gcc.target/riscv/riscv.exp matches
 # only gcc.target/riscv/*.c, so the RVV suites under rvv/ stay out by
 # construction.
-EXPS="gcc.target/riscv/riscv.exp gcc.c-torture/execute/execute.exp"
 
-# The simulator defaults to a 128 KiB region at address 0, but DejaGNU links
-# test programs at 0x10000 and lets newlib's heap grow from _end.  Without a
-# larger region the bigger torture tests fail on a write just past 0x20000,
-# which is a harness limit rather than a code-generation result.
-DEJAGNU_SIM_OPTIONS="--no-gdb --run --fast --timeout=60 --mem-region=0x20000:0x7E0000:heap"
+# DejaGNU links test programs at 0x10000 and lets newlib's heap grow from _end.
+# Explicit regions replace embsim's automatic ELF coverage, so describe both
+# the original 64-KiB program range and the enlarged heap range.
+DEJAGNU_SIM_OPTIONS="--no-gdb-server --run --fast --timeout=60 --mem-region=0x10000:0x10000:program --mem-region=0x20000:0x7E0000:heap"
 export DEJAGNU_SIM_OPTIONS
-export DEJAGNU_SIM="${DEJAGNU_SIM:-$ONIO_RV32SIM/.venv/bin/mikrosim}"
+export DEJAGNU_SIM="${DEJAGNU_SIM:-$ONIO_EMBSIM/target/release/embsim}"
+
+if [ ! -x "$DEJAGNU_SIM" ]; then
+  echo "embsim executable not found: $DEJAGNU_SIM" >&2
+  echo "build it with: cargo build --release --manifest-path $ONIO_EMBSIM/Cargo.toml --bin embsim" >&2
+  exit 2
+fi
 
 mkdir -p "$OUTDIR"
 
@@ -64,42 +68,56 @@ if [ -z "$COMPILER_BEFORE" ]; then
   exit 2
 fi
 
-# This DejaGNU has no -j, so run each suite in its own directory concurrently
-# and merge the summaries afterwards.  JOBS caps how many run at once.
-running=0
-shard=0
-for exp in $EXPS; do
-  shard=$((shard + 1))
-  dir="$OUTDIR/shard$shard"
-  mkdir -p "$dir"
-  sed "s|set tmpdir .*|set tmpdir $dir|" "$ONIO_BUILD/gcc/site.exp" > "$dir/site.exp"
-  echo "running $exp in $dir"
-  (
-    cd "$dir"
-    runtest --tool gcc --srcdir "$ONIO_GCC_SRC/gcc/testsuite" \
-      --target_board=generic-sim/-mcpu=onio-zero "$exp" > runtest.out 2>&1 || true
-  ) &
-  running=$((running + 1))
-  if [ "$running" -ge "$JOBS" ]; then
-    wait
-    running=0
-  fi
-done
-wait
+# GCC's testsuite supplies a cooperative parallelizer for DejaGNU. Each worker
+# enumerates the complete suite; marker files assign each batch to exactly one
+# worker. Run the suites in turn with JOBS workers and merge their summaries.
+case "$JOBS" in
+  ''|*[!0-9]*|0) echo "--jobs must be a positive integer" >&2; exit 2 ;;
+esac
+
+RUN_ID="embsim-$(date +%Y%m%d-%H%M%S)-$$"
+RESULT_DIRS=
+run_suite () {
+  label=$1
+  exp=$2
+  markers="$OUTDIR/$RUN_ID-$label-markers"
+  mkdir -p "$markers"
+  worker=1
+  while [ "$worker" -le "$JOBS" ]; do
+    dir="$OUTDIR/$RUN_ID-$label-worker$worker"
+    RESULT_DIRS="$RESULT_DIRS $dir"
+    mkdir -p "$dir"
+    sed "s|set tmpdir .*|set tmpdir $dir|" "$ONIO_BUILD/gcc/site.exp" > "$dir/site.exp"
+    echo "running $exp worker $worker/$JOBS in $dir"
+    (
+      export GCC_RUNTEST_PARALLELIZE_DIR="$markers"
+      cd "$dir"
+      runtest --tool gcc --srcdir "$ONIO_GCC_SRC/gcc/testsuite" \
+        --target_board=generic-sim/-mcpu=onio-zero "$exp" > runtest.out 2>&1 || true
+    ) &
+    worker=$((worker + 1))
+  done
+  wait
+}
+
+run_suite riscv gcc.target/riscv/riscv.exp
+run_suite execute gcc.c-torture/execute/execute.exp
 
 found=0
-for dir in "$OUTDIR"/shard*; do
+for dir in $RESULT_DIRS; do
   [ -f "$dir/gcc.sum" ] || continue
   found=1
 done
 if [ "$found" -eq 0 ]; then
-  echo "no gcc.sum was produced; see $OUTDIR/shard*/runtest.out" >&2
+  echo "no gcc.sum was produced; see $OUTDIR/$RUN_ID-*/runtest.out" >&2
   exit 2
 fi
 
 # Normalize to result lines that are stable between runs, dropping timing and
 # summary noise.
-cat "$OUTDIR"/shard*/gcc.sum > "$OUTDIR/gcc.sum"
+for dir in $RESULT_DIRS; do
+  [ -f "$dir/gcc.sum" ] && cat "$dir/gcc.sum"
+done > "$OUTDIR/gcc.sum"
 grep -E '^(FAIL|UNRESOLVED|ERROR|XPASS):' "$OUTDIR/gcc.sum" | sort > "$OUTDIR/gate-results.txt" || true
 
 if [ "$COMPILER_BEFORE" != "$(compiler_id)" ]; then

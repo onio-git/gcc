@@ -24,6 +24,15 @@ the CPU design.
   `rebuild-coremark-candidates.sh` provide the pinned source/toolchain
   procedure that recreates all three images; the source manifest is
   `coremark-source-324adf10.sha256`.
+- `results/2026-09-02-embsim-resimulation.md` supersedes the simulator side of
+  the historical records with a complete `embsim` rerun. The machine-readable
+  results are in `results/2026-09-02-embsim-coremark-all.csv`; the runner and
+  translated model are `run-coremark-embsim.py` and
+  `embsim-onio-zero-coremark.json`.
+
+All new ONiO simulation must use `embsim`. The `rv32sim.py` repository remains
+the pinned public location of the CoreMark source snapshot and archived ELF
+artifacts; it is not the simulator used by the current workflow.
 
 ## Acceptance order
 

@@ -1,0 +1,33 @@
+{
+  "model": {
+    "name": "ONiO.zero CoreMark performance model for embsim",
+    "target": "ONiO.zero",
+    "kind": "calibrated-performance-model",
+    "calibration": {
+      "equation": "modeled_cycles = minstret + 9.63 * icache_miss",
+      "measured_builds": 8,
+      "max_absolute_error_percent": 0.9,
+      "raw_dataset": null,
+      "provenance": "Port of rv32sim.py tests/coremark/onio_model.json SHA-256 5fffda831f7fe9dd3054cdbe816c088c21c9c16ea48b12e97bc5e7de9975dfdf"
+    }
+  },
+  "memif": {
+    "code": "aldebaran-icache:size=2048,line=32,ways=2,soft_cycles=1,hard_cycles=10",
+    "data": "flat:penalty=0"
+  },
+  "branch_predictor": {
+    "enabled": true,
+    "entries": 8,
+    "store_forward": false,
+    "alias_word": true
+  },
+  "timing": {
+    "base_cycles": 1,
+    "branch_penalty": 1,
+    "mispredict_penalty": 1,
+    "load_penalty": 0,
+    "store_penalty": 0
+  },
+  "hw_stubs": {},
+  "func_stubs": {}
+}

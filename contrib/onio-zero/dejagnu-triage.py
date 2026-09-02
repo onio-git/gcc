@@ -43,8 +43,14 @@ MAX_EVIDENCE_LINES = 240
 # Evidence signatures, in priority order.  The first match wins.
 SIGNATURES: Tuple[Tuple[str, re.Pattern[str]], ...] = (
     ("ice", re.compile(r"internal compiler error|in \w+, at \S+:\d+")),
-    ("sim_timeout", re.compile(r"\[mikrosim\] INFO: Timeout reached")),
-    ("sim_memory", re.compile(r"\[mikrosim\] ERROR: Memory (write|read) out of range")),
+    (
+        "sim_timeout",
+        re.compile(r"(?:\[mikrosim\] )?INFO: Timeout reached"),
+    ),
+    (
+        "sim_memory",
+        re.compile(r"(?:\[mikrosim\] )?ERROR: [Mm]emory (write|read) out of range"),
+    ),
     (
         "unimplemented_insn",
         re.compile(
@@ -76,7 +82,7 @@ SIGNATURES: Tuple[Tuple[str, re.Pattern[str]], ...] = (
     ("sim_crash", re.compile(r"Segmentation fault|Aborted \(core dumped\)")),
 )
 
-EXIT_RE = re.compile(r"\[mikrosim\] INFO: Halted: exit: (\d+)")
+EXIT_RE = re.compile(r"(?:\[mikrosim\] )?INFO: Halted: exit: (\d+)")
 
 CATEGORY_ORDER = (
     "cross_target",
