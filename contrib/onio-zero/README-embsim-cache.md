@@ -76,10 +76,25 @@ cache:size=2048,line=32,ways=2,lookup=predicted,replace=predicted,word=4,soft_cy
 | `track_sets` | Report hard misses per set |
 
 So an alternative hypothesis about the hardware is a configuration change, not
-a patch. To test whether the part evicts by age rather than by prediction:
+a patch. The model is selected in the stub file the runner passes with
+`--model` (`embsim-onio-zero-coremark.json`), under `memif`:
 
+```json
+"memif": {
+  "code": "wp-icache:size=2048,line=32,ways=2,soft_cycles=1,hard_cycles=10",
+  "data": "flat:penalty=0"
+}
 ```
---memif-code 'cache:size=2048,line=32,ways=2,lookup=predicted,replace=lru,word=4,soft_cycles=1,hard_cycles=10'
+
+To test whether the part evicts by age rather than by prediction, copy that
+file, change one field, and run both:
+
+```json
+"code": "cache:size=2048,line=32,ways=2,lookup=predicted,replace=lru,word=4,soft_cycles=1,hard_cycles=10"
+```
+
+```bash
+./contrib/onio-zero/run-coremark-embsim.py --embsim "$EMBSIM" --model my-variant.json ...
 ```
 
 ## The SRAM-word effect
@@ -102,11 +117,11 @@ deliberate. What a split costs is not known, and a made-up number would appear
 in a report indistinguishable from a measurement. The counters are the part a
 compiler can act on; the cost is the part a board measurement has to supply.
 
-To explore a hypothesis, set it and compare — but label the result as
-conditional on the assumption:
+To explore a hypothesis, set it in a copy of the model file and compare — but
+label the result as conditional on the assumption:
 
-```
---memif-code 'wp-icache:size=2048,line=32,ways=2,soft_cycles=1,hard_cycles=10,split_word_cycles=1'
+```json
+"code": "wp-icache:size=2048,line=32,ways=2,soft_cycles=1,hard_cycles=10,split_word_cycles=1"
 ```
 
 ## What is still uncalibrated
