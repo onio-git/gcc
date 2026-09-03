@@ -77,6 +77,7 @@ class Measurement:
     code_nonsequential_hard_misses: int = 0
     code_word_fetches: int = 0
     code_split_word_fetches: int = 0
+    code_set_hard_misses: str = ""
     data_accesses: int = 0
     coremark_per_mhz: float = 0.0
     modeled_coremark_per_mj: float = 0.0
@@ -205,6 +206,16 @@ def memory_counters(output: str, label: str, required: bool) -> dict[str, int]:
                 f"missing required {label.lower()} memory counters: {', '.join(missing)}"
             )
     return counters
+
+
+def set_hard_miss_summary(counters: dict[str, int]) -> str:
+    """Return the nonzero per-set hard misses in stable set-number order."""
+    indexed: list[tuple[int, int]] = []
+    for name, count in counters.items():
+        match = re.fullmatch(r"set(\d+)_hard_misses", name)
+        if match is not None:
+            indexed.append((int(match.group(1)), count))
+    return ";".join(f"{index}:{count}" for index, count in sorted(indexed))
 
 
 def unused_tcp_port() -> int:
@@ -394,6 +405,7 @@ def run_unique(
             code_nonsequential_hard_misses=code.get("nonsequential_hard_misses", 0),
             code_word_fetches=code.get("word_fetches", 0),
             code_split_word_fetches=code.get("split_word_fetches", 0),
+            code_set_hard_misses=set_hard_miss_summary(code),
             data_accesses=data.get("accesses", 0),
             coremark_per_mhz=iterations * 1_000_000 / cycles,
             modeled_coremark_per_mj=cm_at_freq / power_mw,

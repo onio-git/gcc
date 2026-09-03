@@ -1,0 +1,30 @@
+{
+  "model": {
+    "name": "ONiO.zero LRU replacement, lowest empty-way fill",
+    "target": "ONiO.zero",
+    "kind": "uncalibrated-cache-hypothesis",
+    "parameter_status": {
+      "hard_cycles": "Uncalibrated placeholder.",
+      "use": "Compare event counts; do not treat modeled cycles as a board prediction."
+    }
+  },
+  "memif": {
+    "code": "cache:size=2048,line=32,ways=2,lookup=predicted,replace=lru,fill_policy=lowest,word=4,soft_cycles=1,hard_cycles=10,track_sets=true",
+    "data": "flat:penalty=0"
+  },
+  "branch_predictor": {
+    "enabled": true,
+    "entries": 8,
+    "store_forward": false,
+    "alias_word": true
+  },
+  "timing": {
+    "base_cycles": 1,
+    "branch_penalty": 1,
+    "mispredict_penalty": 1,
+    "load_penalty": 0,
+    "store_penalty": 0
+  },
+  "hw_stubs": {},
+  "func_stubs": {}
+}

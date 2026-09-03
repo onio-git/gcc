@@ -108,6 +108,38 @@ file, change one field, and run both:
 ./contrib/onio-zero/run-coremark-embsim.py --embsim "$EMBSIM" --model my-variant.json ...
 ```
 
+The checked-in hypotheses used for the GCC 6b53/9e3e comparison are under
+`cache-calibration/`:
+
+- `predicted-lowest.json`: the documented prediction/replacement behaviour;
+- `lru-lowest.json`: LRU replacement instead;
+- `predicted-fill.json`: fill the predicted empty way instead of the lowest;
+- `predicted-lowest-split1.json`: a one-cycle split-word sensitivity check.
+
+They enable `track_sets=true`.  The runner stores the resulting nonzero counts
+in the CSV `code_set_hard_misses` field as `set:count` pairs ordered by set
+number.  Their sum must equal `code_hard_misses`.  The split-one model is a
+control: its cycle count must exceed `predicted-lowest` by exactly
+`code_split_word_fetches`; it is not a claim that the hardware cost is one
+cycle.
+
+`cache-calibration/build-probes.sh` builds two embsim-reference ELFs and
+records their inputs and commands.  The underlying assembly routines are also
+designed to be linked into the real board harness:
+
+```c
+unsigned int onio_cache_replacement_probe(void);
+void onio_split_word_probe(unsigned int iterations,
+                           volatile unsigned int *aligned_cycles,
+                           volatile unsigned int *split_cycles);
+```
+
+The replacement probe amplifies predicted-versus-LRU replacement across every
+cache set.  The split probe compares otherwise identical warm instruction
+loops at `pc % 4 == 0` and `pc % 4 == 2`; `iterations` must be nonzero.  The
+reference wrapper uses the rv32sim CoreMark ecall port only for embsim.  On the
+part, use the engineer's known-good board output and startup code.
+
 ## The SRAM-word effect
 
 The array is read a word at a time. A 32-bit instruction at `pc % 4 == 2`
