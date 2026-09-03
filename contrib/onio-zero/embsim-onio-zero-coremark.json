@@ -20,7 +20,7 @@
     }
   },
   "memif": {
-    "code": "aldebaran-icache:size=2048,line=32,ways=2,soft_cycles=1,hard_cycles=10",
+    "code": "wp-icache:size=2048,line=32,ways=2,soft_cycles=1,hard_cycles=10",
     "data": "flat:penalty=0"
   },
   "branch_predictor": {
