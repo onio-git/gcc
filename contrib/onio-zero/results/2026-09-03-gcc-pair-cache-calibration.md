@@ -139,76 +139,32 @@ under embsim.  For real hardware, link the two assembly functions into the
 engineer's known-good UART/debug board harness; the assembly interfaces do not
 depend on ecall output.
 
-## Exact external test request
+## External tester request
 
-With an existing GNU Binutils 2.43 prefix in `$prefix`, the source side of the
-handoff is concretely reproducible as follows:
+The external engineer already has a working board and CoreMark setup.  Do not
+ask them to reproduce our host toolchain, use our reference ELF files, change
+their harness, or integrate the cache probes.  The practical request is only:
 
-```sh
-git clone --branch onio-zero-next https://github.com/onio-git/gcc.git gcc-control
-git -C gcc-control worktree add ../gcc-6b53 \
-  6b53b974280438b49f44783753f92f90b4c00558
-git -C gcc-control worktree add ../gcc-9e3e \
-  9e3ea11a5397d96d86fb30cc3dae93bb6186ff9d
-(cd gcc-6b53 && ./contrib/download_prerequisites)
-(cd gcc-9e3e && ./contrib/download_prerequisites)
+1. Check out and build GCC
+   `6b53b974280438b49f44783753f92f90b4c00558`.
+2. Clean-build and run CoreMark three times in the engineer's existing setup.
+3. Repeat unchanged with GCC
+   `9e3ea11a5397d96d86fb30cc3dae93bb6186ff9d`.
+4. Return the complete output from all six runs and identify the compiler
+   commit used for each set.
 
-for name in 6b53 9e3e; do
-  mkdir "build-$name"
-  (
-    cd "build-$name"
-    PATH="$prefix/bin:$PATH" "../gcc-$name/configure" \
-      --target=riscv32-unknown-elf --prefix="$PWD/toolchain-$name" \
-      --with-arch=rv32imc_zicsr_zba_zbb_zbs_zifencei --with-abi=ilp32 \
-      --disable-multilib --with-newlib --without-headers --disable-shared \
-      --disable-threads --disable-nls --disable-libssp --disable-libquadmath \
-      --disable-libgomp --enable-languages=c,lto
-    PATH="$prefix/bin:$PATH" make -j4 all-gcc all-target-libgcc
-  )
-done
+The two builds must use the same CoreMark source, flags, linker script, board,
+clock, and run procedure.  An ELF SHA-256 is useful as an output label if it is
+easy to provide, but it is not a checkout identifier and is not required to
+perform the test.
 
-git clone https://github.com/mikro-design/rv32sim.py.git rv32sim.py
-git -C rv32sim.py checkout 324adf10be1886ab74e8abd04b36e17e8e11369e
+## Internal follow-up, not an external request
 
-for name in 6b53 9e3e; do
-  PATH="$prefix/bin:$PATH" \
-  ONIO_GCC_BUILD="$PWD/build-$name" \
-  ONIO_AS="$prefix/bin/riscv32-unknown-elf-as" \
-  ONIO_LD="$prefix/bin/riscv32-unknown-elf-ld" \
-  ONIO_SIZE="$prefix/bin/riscv32-unknown-elf-size" \
-  ONIO_ITERATIONS=2000 \
-    gcc-control/contrib/onio-zero/rebuild-coremark-candidates.sh \
-      rv32sim.py/tests/coremark "coremark-$name"
-done
+The exact source reconstruction, per-set embsim matrix, and cache probes above
+are for our own compiler/simulator investigation.  We can integrate the probes
+with a board harness later, with the board owner's involvement, if the simple
+CoreMark A/B results justify that work.  They must not be added to the current
+tester request.
 
-PATH="$prefix/bin:$PATH" \
-ONIO_GCC_BUILD="$PWD/build-6b53" \
-ONIO_SIZE="$prefix/bin/riscv32-unknown-elf-size" \
-  gcc-control/contrib/onio-zero/cache-calibration/build-probes.sh \
-    rv32sim.py/tests/coremark cache-probes
-```
-
-Use an absolute installation prefix in practice.  `ONIO_GCC_BUILD` selects
-the just-built `xgcc` and target `libgcc`; no installed GCC is substituted.
-
-1. Check out and build GCC commits
-   `6b53b974280438b49f44783753f92f90b4c00558` and
-   `9e3ea11a5397d96d86fb30cc3dae93bb6186ff9d` with the same configure line.
-2. Build the pinned CoreMark source with `ONIO_ITERATIONS=2000` and
-   `rebuild-coremark-candidates.sh`.  Report the produced target ELF SHA-256;
-   matching the values above confirms the exact images, while a mismatch must
-   be accompanied by `toolchain.txt` and `commands.log`.
-3. Alternate the two target images on one board for at least five retained
-   runs each.  Record raw, unrounded cycle counts, run order, validation CRCs,
-   board/silicon revision, clock, voltage, flash/cache configuration,
-   temperature, and flash/debug command.
-4. Link and run the replacement and split-word probe functions in that same
-   board harness.  Reset before every replacement-probe run and retain at
-   least ten cycle readings.  For the split probe, retain both individual
-   readings from every run.
-5. Return the actual flashed ELFs, their SHA-256 values and section sizes, all
-   raw readings, and the complete build logs.  Do not return only compiler
-   commit IDs or screenshots rounded to two decimals.
-
-Only those board results can select the cache policy/costs and decide whether
-a future compiler revision is better than 6b53.
+Until repeatable board A/B results say otherwise, `6b53b974...` remains the
+board-approved baseline and embsim remains a structural screening tool.
