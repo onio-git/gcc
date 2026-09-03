@@ -15,6 +15,11 @@ EMBSIM=$(contrib/onio-zero/fetch-embsim.sh)
 unpacking, and caches under `~/.cache/embsim`. Pass a version to override:
 `fetch-embsim.sh v0.2.0`.
 
+The runner also needs `gdb-multiarch` (or a RISC-V-capable GDB passed with
+`--gdb`). It starts the published simulator's GDB stub on loopback and sends
+the measurement commands through `monitor`; it does not use the interactive
+terminal debugger opened by `--debug`.
+
 embsim is in a **private** repository, so its releases need credentials. The
 browser download URL returns 404 without them, which reads as a missing file
 rather than a missing token — the script uses the API asset endpoint instead
@@ -51,7 +56,13 @@ traffic landed on whatever was being measured.
 **The statistics format is an interface.** One counter per line, as
 `Code memory <counter>: <value>` and `Data memory <counter>: <value>`. It is
 pinned by a test in embsim precisely because a parser that stops matching
-reports zero rather than an error.
+reports zero rather than an error. The runner requires the complete cache
+counter set whenever the selected stub configures a cache, including
+`word_fetches` and `split_word_fetches`; a missing counter fails the run.
+
+Every CSV row records the embsim version, SHA-256 of the executable, and
+SHA-256 of the model file, so results retain their simulator and configuration
+provenance after they have been copied elsewhere.
 
 ## The cache is parameters, not a menu
 

@@ -26,6 +26,7 @@ esac
 install_dir="$DEST/$VERSION"
 binary="$install_dir/${ASSET%%.tar.gz}/embsim"
 if [ -x "$binary" ]; then
+  "$binary" --version >&2
   echo "$binary"
   exit 0
 fi
